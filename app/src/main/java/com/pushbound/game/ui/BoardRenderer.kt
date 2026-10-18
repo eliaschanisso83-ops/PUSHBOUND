@@ -30,8 +30,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.unit.toDp
-import androidx.compose.ui.unit.toPx
 import com.pushbound.game.R
 import com.pushbound.game.engine.Position
 import kotlin.math.roundToInt
@@ -91,18 +89,17 @@ fun BoardView(controller: GameController, modifier: Modifier = Modifier) {
     }
 
     BoxWithConstraints(modifier) {
-        val geometry = BoardGeometry.fit(
-            availableWidth = maxWidth.toPx(),
-            availableHeight = maxHeight.toPx(),
-            columns = level.width,
-            rows = level.height
-        )
-        if (geometry.cellSize > 0f) {
+        // Fit in dp space just to size the board canvas; the authoritative
+        // pixel geometry is rebuilt from the canvas' own size below, so no
+        // explicit dp<->px conversion is needed anywhere.
+        val board = BoardGeometry.fit(maxWidth.value, maxHeight.value, level.width, level.height)
+        if (board.cellSize > 0f) {
             Canvas(
                 Modifier
                     .align(Alignment.Center)
-                    .size(geometry.boardWidth.toDp(), geometry.boardHeight.toDp())
+                    .size(board.boardWidth.dp, board.boardHeight.dp)
             ) {
+                val geometry = BoardGeometry.fit(size.width, size.height, level.width, level.height)
                 val wallSubset = level.walls
 
                 // --- floor: exact cell fill, tiles edge to edge -------------
