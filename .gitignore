@@ -20,3 +20,7 @@ captures/
 tooling/
 *.deb
 opencode.json
+
+# Local credentials / device SSH (never commit)
+.git-credentials
+.ssh/
