@@ -1,0 +1,22 @@
+# Gradle / Android build artifacts
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+
+# Mobile development environment (not part of the game project)
+.bash_history
+.cache/
+.config/
+.local/
+.opencode/
+.termux/
+tooling/
+*.deb
+opencode.json
