@@ -24,11 +24,14 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.text.ExperimentalTextApi
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.toDp
+import androidx.compose.ui.unit.toPx
 import com.pushbound.game.R
 import com.pushbound.game.engine.Position
 import kotlin.math.roundToInt
@@ -211,7 +214,7 @@ private fun DrawScope.drawDebugGrid(
     columns: Int,
     rows: Int,
     player: Position,
-    boxes: List<Position>,
+    boxes: Set<Position>,
     walls: Set<Position>,
     goals: Set<Position>,
     textMeasurer: androidx.compose.ui.text.TextMeasurer
