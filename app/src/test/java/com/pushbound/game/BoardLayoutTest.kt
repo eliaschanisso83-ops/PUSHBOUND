@@ -14,6 +14,7 @@ import com.pushbound.game.ui.SpritePlacement
 import com.pushbound.game.ui.SpriteSubject
 import com.pushbound.game.ui.WallTiling
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
@@ -140,6 +141,38 @@ class BoardLayoutTest {
         assertTrue(ApprovedSprites.WALL_FACE_TOP >= ApprovedSprites.wall.y)
         assertTrue(ApprovedSprites.WALL_FACE_BOTTOM <= ApprovedSprites.wall.y + ApprovedSprites.wall.height)
         assertTrue(WallTiling.capHeight(128f) < 128f)
+    }
+
+    @Test
+    fun wallFaceBandIsTheApprovedMasonryCourse() {
+        // Material regression guard: the face band must sample the art's
+        // HERO masonry course (mortar at 392, bright brick face, AO
+        // under-shadow, next mortar peak at 529 = one 137px course
+        // period). The old y[529..619] band sat in the art's floor-AO
+        // shadow and crushed into dark thin lines at cell scale — the
+        // constants are pinned so that band can never come back.
+        assertEquals(392, ApprovedSprites.WALL_FACE_TOP)
+        assertEquals(529, ApprovedSprites.WALL_FACE_BOTTOM)
+        assertEquals(137, ApprovedSprites.WALL_FACE_BOTTOM - ApprovedSprites.WALL_FACE_TOP)
+        // At frame scale the pitch is exactly one course period.
+        assertEquals(137f, WallTiling.facePitch(ApprovedSprites.FRAME.toFloat()), 0.001f)
+    }
+
+    @Test
+    fun wallRunningBondAlternatesOnGlobalCourseParity() {
+        // faceTileIndices can produce negative m near the board top, so the
+        // parity must hold for negative indices too: the same course gets
+        // the same offset from every wall cell.
+        assertFalse(WallTiling.isBondOffsetCourse(-2))
+        assertTrue(WallTiling.isBondOffsetCourse(-1))
+        assertFalse(WallTiling.isBondOffsetCourse(0))
+        assertTrue(WallTiling.isBondOffsetCourse(1))
+        assertFalse(WallTiling.isBondOffsetCourse(2))
+        // Half of the ~177px measured brick period at frame scale.
+        assertEquals(
+            ApprovedSprites.WALL_BRICK_BOND.toFloat(),
+            WallTiling.bondOffset(ApprovedSprites.FRAME.toFloat()), 0.001f
+        )
     }
 
     // ------------------------------------------- section 18 validation grid --

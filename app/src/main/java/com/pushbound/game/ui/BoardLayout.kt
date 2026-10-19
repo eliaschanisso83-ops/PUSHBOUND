@@ -84,13 +84,27 @@ object ApprovedSprites {
     val playerLeft = SpriteSubject(411, 129, 193, 773)    // profile; intrinsically half as wide
     val playerRight = SpriteSubject(411, 129, 193, 773)   // profile; identical metrics to left
 
-    // Wall internals, located with tools/png_rowprofile.sh (per-row brightness):
-    // mortar lines sit at y=392..395 (joint under the cap) and y=529/576/619
-    // (course joints of the lower face).
+    // Wall internals, located with tools/png_profile.c (per-row/column mean
+    // brightness on the approved strip). The material bands are:
+    //   cap course   y[332..391]  large lit bricks seen slightly from above
+    //   mortar       y[392..395]  bright peak after the dark recess (b~82→170)
+    //   hero course  y[396..491]  bright fired-clay brick face (b~125)
+    //   AO shadow    y[492..525]  the course's recessed under-edge (b~77)
+    //   next mortar  y[526..531]  peak at 529
+    // One full masonry course period = 137px: mortar + brick face + AO
+    // under-shadow, i.e. exactly what makes a course read as a physical
+    // brick with recessed mortar. The small courses below y=532 live in the
+    // art's floor AO gradient (b~58-78); tiling THAT band (the old
+    // y[529..619] crop) crushed the material into dark thin lines at cell
+    // scale and must not be used. Vertical brick joints measured at
+    // x≈60/247/423/601/777/945 (~177px period, natural variation); the
+    // frame seam splits one brick, so the strip tiles horizontally with a
+    // believable joint at cell boundaries.
     const val WALL_CAP_TOP = 332
     const val WALL_CAP_BOTTOM = 395
-    const val WALL_FACE_TOP = 529
-    const val WALL_FACE_BOTTOM = 619
+    const val WALL_FACE_TOP = 392
+    const val WALL_FACE_BOTTOM = 529
+    const val WALL_BRICK_BOND = 88  // half of the ~177px brick period
 }
 
 /** Where the subject anchors inside its cell. */
@@ -200,25 +214,45 @@ object BoardSprites {
 }
 
 /**
- * Wall rendering: the approved wall art is a full-width brick strip (one lit
- * cap course + face courses). To make ONE WALL TILE = ONE GRID CELL with no
- * gaps in either horizontal or vertical runs (section 4/12), each wall cell
- * is filled with the face crop tiled vertically at its natural course pitch,
- * phase-anchored GLOBALLY (board coordinate space) so vertically adjacent
- * wall cells continue the brick pattern exactly. The cap course is drawn once
+ * Wall rendering: the approved wall art is a full-width masonry strip (one
+ * lit cap course + hero face course + AO-shadowed lower courses). To make
+ * ONE WALL TILE = ONE GRID CELL with no gaps in either horizontal or
+ * vertical runs (section 4/12), each wall cell is filled with the FACE
+ * crop tiled vertically at its natural course pitch (one full brick
+ * course: mortar + face + recessed under-shadow), phase-anchored GLOBALLY
+ * (board coordinate space) so vertically adjacent wall cells continue the
+ * brick pattern exactly. Alternate courses are shifted half a brick
+ * (running bond) on the same global parity. The cap course is drawn once
  * at the exposed end of a wall run.
+ *
+ * Geometry (footprint, cell mapping, cap semantics, continuity) is the
+ * corrected grid system and stays untouched; only the material band the
+ * face samples was corrected to the art's hero brick course.
  *
  * No stretching: the face tiles keep the art's own course height; only the
  * uniform cell scale applies.
  */
 object WallTiling {
-    /** Face tile pitch for a given cell size (art course height × cell scale). */
+    /** Face tile pitch for a given cell size (one art course period × cell scale). */
     fun facePitch(cellSize: Float): Float =
         (ApprovedSprites.WALL_FACE_BOTTOM - ApprovedSprites.WALL_FACE_TOP) * cellSize / ApprovedSprites.FRAME
 
     /** Cap strip height for a given cell size. */
     fun capHeight(cellSize: Float): Float =
         (ApprovedSprites.WALL_CAP_BOTTOM - ApprovedSprites.WALL_CAP_TOP) * cellSize / ApprovedSprites.FRAME
+
+    /** Half-brick running-bond offset for a course (art px × cell scale). */
+    fun bondOffset(cellSize: Float): Float =
+        ApprovedSprites.WALL_BRICK_BOND * cellSize / ApprovedSprites.FRAME
+
+    /**
+     * Whether the course with global index m is drawn shifted half a brick
+     * (running bond, as the approved art stacks its own courses). Parity is
+     * computed on the GLOBAL course index, so every wall cell derives the
+     * same alternation for the same canvas row: vertical runs keep both the
+     * pattern phase and the bond alternation across cell boundaries.
+     */
+    fun isBondOffsetCourse(m: Int): Boolean = (((m % 2) + 2) % 2) == 1
 
     /**
      * Tile indices (m) whose band [anchorY + m*pitch, anchorY + (m+1)*pitch]

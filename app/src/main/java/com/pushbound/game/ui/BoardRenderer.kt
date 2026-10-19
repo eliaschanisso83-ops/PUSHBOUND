@@ -131,15 +131,41 @@ fun BoardView(controller: GameController, modifier: Modifier = Modifier) {
                     val r = geometry.cellLeft((wallPosition.col + 1).toFloat()).roundToInt()
                     val b = geometry.cellTop((wallPosition.row + 1).toFloat()).roundToInt()
                     clipRect(l.toFloat(), t.toFloat(), r.toFloat(), b.toFloat()) {
+                        // Face = one full masonry course per tile (mortar +
+                        // brick face + AO under-shadow), tiled on the global
+                        // phase anchor. Alternate courses shift half a brick
+                        // (running bond), wrapping at the tile seam.
+                        val faceH = ApprovedSprites.WALL_FACE_BOTTOM - ApprovedSprites.WALL_FACE_TOP
+                        val bondPx = WallTiling.bondOffset(geometry.cellSize).roundToInt()
                         for (m in WallTiling.faceTileIndices(t.toFloat(), b.toFloat(), pitch)) {
                             val top = (m * pitch).roundToInt()
                             val bottom = ((m + 1) * pitch).roundToInt()
-                            wall.drawSubject(
-                                this, l, top, r - l, bottom - top,
-                                srcX = 0, srcY = ApprovedSprites.WALL_FACE_TOP,
-                                srcW = ApprovedSprites.FRAME,
-                                srcH = ApprovedSprites.WALL_FACE_BOTTOM - ApprovedSprites.WALL_FACE_TOP
-                            )
+                            val dstH = bottom - top
+                            val dx = if (WallTiling.isBondOffsetCourse(m)) bondPx else 0
+                            if (dx in 1 until (r - l)) {
+                                wall.drawSubject(
+                                    this, l + dx, top, r - l - dx, dstH,
+                                    srcX = ApprovedSprites.WALL_BRICK_BOND,
+                                    srcY = ApprovedSprites.WALL_FACE_TOP,
+                                    srcW = ApprovedSprites.FRAME - ApprovedSprites.WALL_BRICK_BOND,
+                                    srcH = faceH
+                                )
+                                wall.drawSubject(
+                                    this, l, top, dx, dstH,
+                                    srcX = 0,
+                                    srcY = ApprovedSprites.WALL_FACE_TOP,
+                                    srcW = ApprovedSprites.WALL_BRICK_BOND,
+                                    srcH = faceH
+                                )
+                            } else {
+                                wall.drawSubject(
+                                    this, l, top, r - l, dstH,
+                                    srcX = 0,
+                                    srcY = ApprovedSprites.WALL_FACE_TOP,
+                                    srcW = ApprovedSprites.FRAME,
+                                    srcH = faceH
+                                )
+                            }
                         }
                         val above = Position(wallPosition.row - 1, wallPosition.col) in wallSubset
                         val below = Position(wallPosition.row + 1, wallPosition.col) in wallSubset

@@ -41,10 +41,13 @@ BEGIN {
   boxX = 154; boxY = 146; boxW = 694; boxH = 694; boxFP = 0.74
   goalX = 105; goalY = 102; goalW = 807; goalH = 819; goalFP = 0.86
   plX = 319; plY = 129; plW = 378; plH = 773; plFP = 0.42
-  # wall internals (tools/png_rowprofile.sh)
+  # wall internals (tools/png_profile.c): face = one masonry course
+  # period 392..529 (mortar + brick face + AO under-shadow)
   capY = 332; capH = 63
-  faceY = 529; faceH = 90
+  faceY = 392; faceH = 137
+  bond = 88
   pitch = faceH * k
+  bondPx = rint(bond * k)
 
   # ---- floor (exact cell fill; tiles edge to edge) -----------------------
   for (r = 0; r < H; r++) for (c = 0; c < W; c++)
@@ -69,8 +72,15 @@ BEGIN {
       cx0 = rint(wc[i] * CELL); cy0 = rint(wr[i] * CELL)
       print "clip " cx0 " " cy0 " " CELL " " CELL
       m0 = int(cy0 / pitch) - 1; m1 = int((cy0 + CELL) / pitch) + 2
-      for (m = m0; m <= m1; m++)
-        print "stamp wall 0 " faceY " 1024 " faceH " " cx0 " " rint(m*pitch) " " CELL " " (rint((m+1)*pitch) - rint(m*pitch))
+      for (m = m0; m <= m1; m++) {
+        y0 = rint(m*pitch); y1 = rint((m+1)*pitch)
+        if (bondPx > 0 && bondPx < CELL && (m % 2 + 2) % 2 == 1) {
+          print "stamp wall " bond " " faceY " " (1024-bond) " " faceH " " (cx0+bondPx) " " y0 " " (CELL-bondPx) " " (y1-y0)
+          print "stamp wall 0 " faceY " " bond " " faceH " " cx0 " " y0 " " bondPx " " (y1-y0)
+        } else {
+          print "stamp wall 0 " faceY " 1024 " faceH " " cx0 " " y0 " " CELL " " (y1-y0)
+        }
+      }
       above = ((wr[i]-1) "," wc[i]) in iswall
       below = ((wr[i]+1) "," wc[i]) in iswall
       if (!above || !below)
