@@ -1,19 +1,15 @@
 package com.pushbound.game.ui
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -45,6 +41,18 @@ private val PressedDarken = ColorFilter.colorMatrix(
 
 private const val SINK_FRACTION = 0.02f
 
+/**
+ * Bottom control area — THREE horizontal zones, layout only:
+ *
+ *   [ Undo ]   [ centered movement cross ]   [ Restart ]
+ *
+ * The four movement buttons form a centered D-pad with a uniform, clearly
+ * visible gap between every neighbouring pair (see DPadLayout); Undo and
+ * Restart sit outside the cluster on opposite sides, vertically centered
+ * against it. Buttons are slices of the approved sheets at the app's
+ * existing scale (same pixels, same dimensions, same behavior) — nothing
+ * about their appearance or actions changes here.
+ */
 @Composable
 fun ControlsBar(controller: GameController, modifier: Modifier = Modifier) {
     BoxWithConstraints(
@@ -53,45 +61,58 @@ fun ControlsBar(controller: GameController, modifier: Modifier = Modifier) {
             .navigationBarsPadding()
             .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
+        // Reference size: EXACTLY the pre-existing button sizing formula, so
+        // the reorganization never changes button dimensions.
         val dpadSize: Dp = minOf(220.dp, maxWidth * 0.52f)
-        Column(
-            modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(26.dp),
-                verticalAlignment = Alignment.Bottom
-            ) {
-                DPad(controller, Modifier.size(dpadSize))
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SecondaryButton(
-                        resId = R.drawable.ui_button_undo,
-                        label = "Undo",
-                        enabled = controller.canUndo,
-                        onClick = controller::undo
-                    )
-                    SecondaryButton(
-                        resId = R.drawable.ui_button_restart,
-                        label = "Restart",
-                        enabled = true,
-                        onClick = controller::restart
-                    )
-                }
-            }
+        val layout = remember(dpadSize) {
+            DPadLayout.compute(scale = dpadSize.value / ControlArtwork.SHEET.toFloat())
+        }
+
+        Box(Modifier.fillMaxWidth()) {
+            // Center zone: the primary movement cluster, exactly centered
+            // regardless of the side buttons' widths.
+            DPad(
+                controller = controller,
+                referenceSize = dpadSize,
+                layout = layout,
+                modifier = Modifier.align(Alignment.Center)
+            )
+
+            // Left zone: secondary action, outside the cluster.
+            SecondaryButton(
+                resId = R.drawable.ui_button_undo,
+                label = "Undo",
+                enabled = controller.canUndo,
+                onClick = controller::undo,
+                modifier = Modifier.align(Alignment.CenterStart)
+            )
+
+            // Right zone: secondary action, mirrored.
+            SecondaryButton(
+                resId = R.drawable.ui_button_restart,
+                label = "Restart",
+                enabled = true,
+                onClick = controller::restart,
+                modifier = Modifier.align(Alignment.CenterEnd)
+            )
         }
     }
 }
 
-private data class ImageRegion(val x: Int, val y: Int, val width: Int, val height: Int)
-
 /**
- * One shared artwork for all four directions. Touch targets are the generous
- * thirds of the pad (independent of where the arrow pixels are), and pressed
- * feedback is per-direction: the approved pressed artwork for DOWN, and the
+ * Four independent movement buttons arranged as a cross. Each button is a
+ * slice of the shared approved artwork drawn at the app's existing sheet
+ * scale, with its own touch target exactly on the visible button. Touch
+ * feedback is unchanged: the approved pressed artwork for DOWN, and the
  * documented darken+sink treatment for UP/LEFT/RIGHT.
  */
 @Composable
-private fun DPad(controller: GameController, modifier: Modifier = Modifier) {
+private fun DPad(
+    controller: GameController,
+    referenceSize: Dp,
+    layout: DPadLayout,
+    modifier: Modifier = Modifier
+) {
     val normal = rememberGameBitmap(R.drawable.ui_dpad_normal)
     val pressedArtwork = rememberGameBitmap(R.drawable.ui_dpad_pressed)
 
@@ -104,102 +125,132 @@ private fun DPad(controller: GameController, modifier: Modifier = Modifier) {
     val downPressed by downInteraction.collectIsPressedAsState()
     val rightPressed by rightInteraction.collectIsPressedAsState()
 
-    val baseImage = if (downPressed) pressedArtwork else normal
-
-    Box(modifier) {
-        Image(
-            bitmap = baseImage,
-            contentDescription = null,
-            modifier = Modifier.fillMaxSize()
+    Box(
+        modifier
+            .size(layout.width.dp, layout.height.dp)
+    ) {
+        DirectionButton(
+            direction = Direction.UP,
+            normal = normal,
+            pressedArtwork = pressedArtwork,
+            slice = ControlArtwork.up,
+            pressed = upPressed,
+            usePressedArtwork = false,
+            pressedSlice = null,
+            referenceSize = referenceSize,
+            rect = layout.up,
+            interactionSource = upInteraction,
+            controller = controller
         )
-
-        if (upPressed || leftPressed || rightPressed) {
-            Canvas(Modifier.fillMaxSize()) {
-                val scaleX = size.width / baseImage.width
-                val scaleY = size.height / baseImage.height
-                val sink = (size.height * SINK_FRACTION).roundToInt()
-                val regions = thirdsOf(baseImage)
-
-                fun drawDarkened(direction: Direction) {
-                    val region = regions.getValue(direction)
-                    drawImage(
-                        image = baseImage,
-                        srcOffset = IntOffset(region.x, region.y),
-                        srcSize = IntSize(region.width, region.height),
-                        dstOffset = IntOffset(
-                            (region.x * scaleX).roundToInt(),
-                            (region.y * scaleY).roundToInt() + sink
-                        ),
-                        dstSize = IntSize(
-                            (region.width * scaleX).roundToInt(),
-                            (region.height * scaleY).roundToInt()
-                        ),
-                        colorFilter = PressedDarken
-                    )
-                }
-
-                if (upPressed) drawDarkened(Direction.UP)
-                if (leftPressed) drawDarkened(Direction.LEFT)
-                if (rightPressed) drawDarkened(Direction.RIGHT)
-            }
-        }
-
-        val regionWidth = 1f / 3f
-        val regionHeight = 1f / 2f
-        DPadRegion(
-            Direction.UP,
-            Modifier.align(Alignment.TopCenter).fillMaxWidth(regionWidth).fillMaxHeight(regionHeight),
-            upInteraction,
-            controller
+        DirectionButton(
+            direction = Direction.LEFT,
+            normal = normal,
+            pressedArtwork = pressedArtwork,
+            slice = ControlArtwork.left,
+            pressed = leftPressed,
+            usePressedArtwork = false,
+            pressedSlice = null,
+            referenceSize = referenceSize,
+            rect = layout.left,
+            interactionSource = leftInteraction,
+            controller = controller
         )
-        DPadRegion(
-            Direction.LEFT,
-            Modifier.align(Alignment.BottomStart).fillMaxWidth(regionWidth).fillMaxHeight(regionHeight),
-            leftInteraction,
-            controller
+        DirectionButton(
+            direction = Direction.RIGHT,
+            normal = normal,
+            pressedArtwork = pressedArtwork,
+            slice = ControlArtwork.right,
+            pressed = rightPressed,
+            usePressedArtwork = false,
+            pressedSlice = null,
+            referenceSize = referenceSize,
+            rect = layout.right,
+            interactionSource = rightInteraction,
+            controller = controller
         )
-        DPadRegion(
-            Direction.DOWN,
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth(regionWidth).fillMaxHeight(regionHeight),
-            downInteraction,
-            controller
-        )
-        DPadRegion(
-            Direction.RIGHT,
-            Modifier.align(Alignment.BottomEnd).fillMaxWidth(regionWidth).fillMaxHeight(regionHeight),
-            rightInteraction,
-            controller
+        DirectionButton(
+            direction = Direction.DOWN,
+            normal = normal,
+            pressedArtwork = pressedArtwork,
+            slice = ControlArtwork.down,
+            pressed = downPressed,
+            usePressedArtwork = true,
+            pressedSlice = ControlArtwork.downPressed,
+            referenceSize = referenceSize,
+            rect = layout.down,
+            interactionSource = downInteraction,
+            controller = controller
         )
     }
 }
 
-private fun thirdsOf(image: ImageBitmap): Map<Direction, ImageRegion> {
-    val width = image.width
-    val height = image.height
-    val third = width / 3
-    val half = height / 2
-    return mapOf(
-        Direction.UP to ImageRegion(third, 0, third, half),
-        Direction.LEFT to ImageRegion(0, half, third, height - half),
-        Direction.DOWN to ImageRegion(third, half, width - 2 * third, height - half),
-        Direction.RIGHT to ImageRegion(width - third, half, third, height - half)
-    )
-}
-
+/**
+ * One movement button: approved artwork slice → its positioned rect.
+ * With [usePressedArtwork] (DOWN) the button swaps to the approved pressed
+ * sheet, drawn at the same sheet scale and offset by the pressed sheet's
+ * own art delta — this reproduces the previous whole-sheet swap
+ * pixel-for-pixel. The other directions apply [PressedDarken] plus the same
+ * sink the old region draw used (2% of the reference pad size).
+ */
 @Composable
-private fun DPadRegion(
+private fun DirectionButton(
     direction: Direction,
-    modifier: Modifier,
+    normal: ImageBitmap,
+    pressedArtwork: ImageBitmap,
+    slice: ArtworkSlice,
+    pressed: Boolean,
+    usePressedArtwork: Boolean,
+    pressedSlice: ArtworkSlice?,
+    referenceSize: Dp,
+    rect: PlacedRect,
     interactionSource: MutableInteractionSource,
     controller: GameController
 ) {
+    val showPressedArtwork = pressed && usePressedArtwork && pressedSlice != null
+    val darken = pressed && !usePressedArtwork
+
     Box(
-        modifier = modifier
+        Modifier
+            .offset(rect.left.dp, rect.top.dp)
+            .size(rect.width.dp, rect.height.dp)
             .clickable(interactionSource = interactionSource, indication = null) {
                 controller.onDirectionPressed(direction)
             }
             .semantics { contentDescription = "Move ${direction.name.lowercase()}" }
-    )
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            if (showPressedArtwork) {
+                // Approved pressed artwork, same px-per-sheet scale as the
+                // normal sheet (as when both sheets were drawn full-pad).
+                val ps = pressedSlice!!
+                val sx = size.width / slice.width.toFloat()
+                drawImage(
+                    image = pressedArtwork,
+                    srcOffset = IntOffset(ps.x, ps.y),
+                    srcSize = IntSize(ps.width, ps.height),
+                    dstOffset = IntOffset(
+                        ((ps.x - slice.x) * sx).roundToInt(),
+                        ((ps.y - slice.y) * sx).roundToInt()
+                    ),
+                    dstSize = IntSize((ps.width * sx).roundToInt(), (ps.height * sx).roundToInt())
+                )
+            } else {
+                val sink = if (darken) {
+                    (referenceSize.toPx() * SINK_FRACTION).roundToInt()
+                } else {
+                    0
+                }
+                drawImage(
+                    image = normal,
+                    srcOffset = IntOffset(slice.x, slice.y),
+                    srcSize = IntSize(slice.width, slice.height),
+                    dstOffset = IntOffset(0, sink),
+                    dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                    colorFilter = if (darken) PressedDarken else null
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -207,7 +258,8 @@ private fun SecondaryButton(
     resId: Int,
     label: String,
     enabled: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val bitmap = rememberGameBitmap(resId)
     val interactionSource = remember { MutableInteractionSource() }
@@ -215,7 +267,7 @@ private fun SecondaryButton(
     val active = pressed && enabled
 
     Box(
-        Modifier
+        modifier
             .size(72.dp)
             .clickable(
                 interactionSource = interactionSource,
