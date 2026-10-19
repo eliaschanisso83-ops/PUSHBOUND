@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -15,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
@@ -42,20 +42,21 @@ private val PressedDarken = ColorFilter.colorMatrix(
 private const val SINK_FRACTION = 0.02f
 
 /**
- * Bottom control area — ONE compact centered formation, layout only:
+ * Bottom control area (layout only):
  *
- *                   [ UP ]
- *    [ Undo ]  [ LEFT ]  [ RIGHT ]  [ Restart ]
- *                   [ DOWN ]
+ *          [ UP ]  [ Undo ]
+ *   [ LEFT ]   [ RIGHT ]  [ Restart ]
+ *          [ DOWN ]
  *
- * The four movement buttons form the centered D-pad (uniform visible gap
- * between every neighbouring pair, see DPadLayout) with Undo immediately
- * outside LEFT and Restart immediately outside RIGHT, vertically aligned
- * with the LEFT/RIGHT row (see ControlsLayout). The cluster is centered
- * horizontally, which keeps UP exactly on its previous axis and at its
- * previous vertical position. Buttons are slices of the approved sheets at
- * the app's existing scale (same pixels, same dimensions, same behavior) —
- * nothing about their appearance or actions changes here.
+ * The four movement buttons form the D-pad dead-center on the bar content —
+ * UP keeps its exact screen axis and vertical position — with the visible
+ * horizontal LEFT/RIGHT separation the player asked for (see DPadLayout),
+ * and Undo stacked above Restart immediately outside RIGHT in the
+ * upper-right corner (the spots the player marked in red/orange on their
+ * annotated screenshot, see ControlsLayout). Buttons are slices of the
+ * approved sheets at the app's existing scale (same pixels, same
+ * dimensions, same behavior) — nothing about their appearance or actions
+ * changes here.
  */
 @Composable
 fun ControlsBar(controller: GameController, modifier: Modifier = Modifier) {
@@ -73,34 +74,38 @@ fun ControlsBar(controller: GameController, modifier: Modifier = Modifier) {
             maxWidth * 0.52f,
             ControlsLayout.fittingDpadSize(maxWidth.value).dp
         ).coerceAtLeast(1.dp)
-        val cluster = remember(dpadSize) { ControlsLayout.compute(dpadSize.value) }
+        val contentWidth = maxWidth.value
+        val formation = remember(dpadSize, contentWidth) {
+            ControlsLayout.compute(contentWidth, dpadSize.value)
+        }
 
-        // One centered cluster box: cross + secondaries placed by the pure
-        // layout math, so the secondary gaps and row alignment stay exact.
+        // One full-width formation box: the cross is centered on the content
+        // and the secondaries stack beside it, all placed by the pure layout
+        // math, so the gaps and alignments stay exact.
         Box(
             Modifier
-                .align(Alignment.Center)
-                .size(cluster.width.dp, cluster.height.dp)
+                .fillMaxWidth()
+                .height(formation.height.dp)
         ) {
             DPad(
                 controller = controller,
                 referenceSize = dpadSize,
-                layout = cluster.dpad,
-                modifier = Modifier.offset(cluster.dpadLeft.dp, 0.dp)
+                layout = formation.dpad,
+                modifier = Modifier.offset(formation.dpadLeft.dp, formation.dpadTop.dp)
             )
             SecondaryButton(
                 resId = R.drawable.ui_button_undo,
                 label = "Undo",
                 enabled = controller.canUndo,
                 onClick = controller::undo,
-                modifier = Modifier.offset(cluster.undo.left.dp, cluster.undo.top.dp)
+                modifier = Modifier.offset(formation.undo.left.dp, formation.undo.top.dp)
             )
             SecondaryButton(
                 resId = R.drawable.ui_button_restart,
                 label = "Restart",
                 enabled = true,
                 onClick = controller::restart,
-                modifier = Modifier.offset(cluster.restart.left.dp, cluster.restart.top.dp)
+                modifier = Modifier.offset(formation.restart.left.dp, formation.restart.top.dp)
             )
         }
     }
