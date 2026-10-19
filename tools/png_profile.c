@@ -5,6 +5,7 @@
  * Usage:
  *   png_profile FILE rows            mean brightness + alpha coverage per row
  *   png_profile FILE cols Y0 Y1      mean brightness per column inside band
+ *   png_profile FILE bbox X0 Y0 X1 Y1  alpha bbox (a>16) of region, as x y w h
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -138,6 +139,36 @@ int main(int argc, char **argv) {
                 cnt++;
             }
             printf("%d %.1f %d\n", x, cnt ? sum / cnt : -1, cnt);
+        }
+    } else if (argc == 7 && !strcmp(argv[2], "bbox")) {
+        int x0 = atoi(argv[3]), y0 = atoi(argv[4]), x1 = atoi(argv[5]), y1 = atoi(argv[6]);
+        if (x1 >= im.w) x1 = im.w - 1;
+        if (y1 >= im.h) y1 = im.h - 1;
+        int minx = -1, miny = -1, maxx = -1, maxy = -1;
+        for (int y = y0; y <= y1; y++) {
+            for (int x = x0; x <= x1; x++) {
+                const unsigned char *p = im.px + ((size_t)y * im.w + x) * 4;
+                if (p[3] <= 16) continue;
+                if (minx < 0 || x < minx) minx = x;
+                if (miny < 0 || y < miny) miny = y;
+                if (x > maxx) maxx = x;
+                if (y > maxy) maxy = y;
+            }
+        }
+        if (minx < 0) { printf("-1 -1 -1 -1\n"); return 0; }
+        printf("%d %d %d %d\n", minx, miny, maxx - minx + 1, maxy - miny + 1);
+    } else if (argc == 5 && !strcmp(argv[2], "rowsx")) {
+        int x0 = atoi(argv[3]), x1 = atoi(argv[4]);
+        if (x1 >= im.w) x1 = im.w - 1;
+        for (int y = 0; y < im.h; y++) {
+            double sum = 0; int cnt = 0;
+            for (int x = x0; x <= x1; x++) {
+                const unsigned char *p = im.px + ((size_t)y * im.w + x) * 4;
+                if (p[3] <= 16) continue;
+                sum += (p[0] * 299 + p[1] * 587 + p[2] * 114) / 1000.0;
+                cnt++;
+            }
+            printf("%d %.1f %d\n", y, cnt ? sum / cnt : -1, cnt);
         }
     } else {
         die("unknown mode");
