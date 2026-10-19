@@ -33,24 +33,23 @@ object ControlArtwork {
     val downPressed = ArtworkSlice(357, 490, 295, 294)
 
     /**
-     * Uniform vertical neighbour gap (UP↔row, row↔DOWN) as a fraction of the
-     * nominal button width: a clearly visible but modest separation (~6.3dp
-     * on a 220dp reference pad) — buttons read as one intentional cluster,
-     * never as touching.
+     * Vertical gap between UP and the single row beneath it, as a fraction
+     * of the nominal button width (~6.3dp on a 220dp reference pad) — a
+     * clearly visible but modest separation, so UP floats above the row
+     * without touching it.
      */
     const val GAP_FRACTION = 0.10f
 
     /**
-     * Horizontal separation between LEFT and RIGHT as a fraction of the
-     * nominal button width (~14.7dp on the reference pad — over twice the
-     * vertical gap). The player explicitly asked for the side buttons to be
-     * clearly SEPARATED ("the right one to the right, the left one to the
-     * left") after the uniform 0.10 gap read as glued on device. Only this
-     * horizontal gap grows: the vertical gaps — and therefore the cross
-     * height, the bar height and UP's on-screen position — stay exactly as
-     * they were.
+     * Gap between the adjacent buttons of the single middle row
+     * (LEFT↔DOWN and DOWN↔RIGHT), as a fraction of the nominal button width
+     * (~18.9dp on the reference pad — three times the vertical gap). The
+     * player asked for the movement buttons to be clearly SPREAD APART and
+     * for "considerable space" between the three in the row, so this gap is
+     * deliberately generous: LEFT sits far left, RIGHT far right, DOWN
+     * between them, none reading as glued.
      */
-    const val SIDE_GAP_FRACTION = 0.25f
+    const val SIDE_GAP_FRACTION = 0.30f
 }
 
 /** A placed control rectangle in layout units (dp). */
@@ -62,22 +61,21 @@ data class PlacedRect(val left: Float, val top: Float, val width: Float, val hei
 }
 
 /**
- * The centered cross arrangement of the four movement buttons:
+ * The movement arrangement: UP floats on top, and the other three form ONE
+ * horizontal row beneath it — a shallow rectangle rather than a diamond:
  *
- *            [ UP ]
- *   [ LEFT ]       [ RIGHT ]
- *          [ DOWN ]
+ *              [ UP ]
+ *   [ LEFT ]  [ DOWN ]  [ RIGHT ]
  *
  * One common center axis: centerX(UP) = centerX(DOWN) = the midpoint of
- * LEFT/RIGHT = width/2 exactly. Side buttons sit in equal slots, so LEFT and
- * RIGHT are equidistant from the axis. Vertical neighbours (UP↔row, row↔DOWN)
- * are separated by the uniform vertical gap; LEFT↔RIGHT uses the wider
- * horizontal [ControlArtwork.SIDE_GAP_FRACTION] gap, so the side buttons are
- * visibly SEPARATED instead of reading as glued. Rects never touch or
- * overlap.
+ * LEFT/RIGHT = width/2 exactly. The three row buttons sit in equal slots
+ * separated by the same generous horizontal gap, so LEFT is pushed far
+ * left, RIGHT far right and DOWN stays on the axis between them, all
+ * visibly separated (never touching). UP keeps the axis and is separated
+ * from the row by the uniform vertical gap. Rects never touch or overlap.
  *
- * Undo and Restart join the cross via [ControlsLayout] as a vertical stack
- * immediately outside RIGHT.
+ * Undo and Restart join the formation via [ControlsLayout] as a vertical
+ * stack immediately outside RIGHT.
  */
 class DPadLayout private constructor(
     val up: PlacedRect,
@@ -92,11 +90,11 @@ class DPadLayout private constructor(
          * @param scale sheet pixels → dp. The caller derives it from the SAME
          *   reference size the app used before (min(220dp, width × 0.52)),
          *   so every button keeps its exact existing on-screen dimensions.
-         * @param gapFrac vertical neighbour gap as a fraction of the nominal
-         *   button width (these gaps — and the cross height — are unchanged
-         *   from the original layout).
-         * @param sideGapFrac horizontal LEFT↔RIGHT gap as a fraction of the
-         *   nominal button width (deliberately wider; layout only).
+         * @param gapFrac vertical UP↔row gap as a fraction of the nominal
+         *   button width.
+         * @param sideGapFrac gap between adjacent row buttons (LEFT↔DOWN,
+         *   DOWN↔RIGHT) as a fraction of the nominal button width
+         *   (deliberately generous; layout only).
          */
         fun compute(
             scale: Float,
@@ -104,7 +102,7 @@ class DPadLayout private constructor(
             sideGapFrac: Float = ControlArtwork.SIDE_GAP_FRACTION
         ): DPadLayout {
             require(scale > 0f) { "scale must be positive" }
-            require(sideGapFrac >= gapFrac) { "side gap must not be smaller than the vertical gap" }
+            require(sideGapFrac >= gapFrac) { "row gap must not be smaller than the vertical gap" }
             val a = ControlArtwork
             val uw = a.up.width * scale
             val uh = a.up.height * scale
@@ -114,20 +112,27 @@ class DPadLayout private constructor(
             val dh = a.down.height * scale
             val rw = a.right.width * scale
             val rh = a.right.height * scale
-            val gap = gapFrac * a.NOMINAL_BUTTON * scale        // vertical
-            val sideGap = sideGapFrac * a.NOMINAL_BUTTON * scale // LEFT ↔ RIGHT
+            val vgap = gapFrac * a.NOMINAL_BUTTON * scale       // UP <-> row
+            val hgap = sideGapFrac * a.NOMINAL_BUTTON * scale   // row gaps
 
-            val slotW = maxOf(lw, rw)   // equal side slots => exact symmetry
-            val midH = maxOf(lh, rh)    // one middle-row band
-            val width = slotW * 2f + sideGap
-            val height = uh + gap + midH + gap + dh
+            // One row of three equal slots: [ LEFT ][ DOWN ][ RIGHT ]. Equal
+            // slots put DOWN exactly on the shared center axis and LEFT /
+            // RIGHT exactly symmetric around it.
+            val slotW = maxOf(lw, dw, rw)   // one slot size => exact symmetry
+            val rowH = maxOf(lh, dh, rh)    // one row band
+            val width = slotW * 3f + hgap * 2f
+            val height = uh + vgap + rowH   // UP on top, one shallow row below
 
-            val midTop = uh + gap
+            val rowTop = uh + vgap
             return DPadLayout(
                 up = PlacedRect((width - uw) / 2f, 0f, uw, uh),
-                left = PlacedRect((slotW - lw) / 2f, midTop + (midH - lh) / 2f, lw, lh),
-                right = PlacedRect(width - slotW + (slotW - rw) / 2f, midTop + (midH - rh) / 2f, rw, rh),
-                down = PlacedRect((width - dw) / 2f, midTop + midH + gap, dw, dh),
+                left = PlacedRect((slotW - lw) / 2f, rowTop + (rowH - lh) / 2f, lw, lh),
+                down = PlacedRect(
+                    slotW + hgap + (slotW - dw) / 2f, rowTop + (rowH - dh) / 2f, dw, dh
+                ),
+                right = PlacedRect(
+                    slotW * 2f + hgap * 2f + (slotW - rw) / 2f, rowTop + (rowH - rh) / 2f, rw, rh
+                ),
                 width = width,
                 height = height
             )
@@ -137,29 +142,28 @@ class DPadLayout private constructor(
 
 /**
  * The complete bottom control formation (layout only, no appearance
- * changes). The player's annotated screenshot drove this arrangement: the
- * cross stays dead-center on the bar content — UP keeps its exact axis and
- * vertical position — while Undo and Restart become a vertical stack
- * hugging the cross's right side in the upper-right of the formation:
+ * changes). The movement block is a shallow single-row rectangle (UP on
+ * top, LEFT / DOWN / RIGHT in one row) that stays dead-center on the bar
+ * content — UP keeps its exact axis and vertical position — while Undo and
+ * Restart become a vertical stack hugging the block's right side:
  *
- *          [ UP ]  [UNDO]
- *   [ LEFT ]   [ RIGHT ] [RESTART]
- *          [ DOWN ]
+ *              [ UP ]  [UNDO]
+ *   [ LEFT ]  [ DOWN ]  [ RIGHT ]  [RESTART]
  *
- *  - The cross keeps the exact screen-centered axis it always had
+ *  - The movement block keeps the exact screen-centered axis it always had
  *    (dpadLeft puts centerX(UP) = content/2 for every width), so UP does
  *    not move at all;
  *  - the stack sits immediately outside RIGHT with the uniform gap (never
  *    at the screen edges, never touching the movement buttons), Undo above
- *    Restart, both to the right of the cross — the "good corner" the
+ *    Restart, both to the right of the block — the "good corner" the
  *    player marked in red/orange;
- *  - the stack rises [STACK_RISE_FRACTION] × cross-height above UP's top,
+ *  - the stack rises [STACK_RISE_FRACTION] × block-height above UP's top,
  *    the height at which BOTH of the player's orange target spots fall
  *    inside their buttons (undo covers the upper spot, restart covers the
  *    lower one) on the reference device;
- *  - the formation box keeps the cross's bottom edge as its bottom edge,
- *    so the bar's growth happens upward only and UP's on-screen position
- *    is preserved exactly.
+ *  - the formation box keeps the movement block's bottom edge as its
+ *    bottom edge, so the bar's growth happens upward only and UP's
+ *    on-screen position is preserved exactly.
  *
  * All coordinates are dp from the formation box's top-left corner.
  */

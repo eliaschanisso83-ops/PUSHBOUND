@@ -10,11 +10,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Control-layout invariants (layout only): the centered cross, the visible
- * LEFT/RIGHT separation, exact symmetry on one center axis, preserved button
- * dimensions, and the compact formation — cross dead-center with the
- * Undo/Restart stack hugging its right side without moving UP. Pure
- * geometry — no Android/Compose dependencies.
+ * Control-layout invariants (layout only): the shallow single-row movement
+ * rectangle (UP on top, LEFT/DOWN/RIGHT in one generously spaced row), exact
+ * symmetry on one center axis, preserved button dimensions, and the compact
+ * formation — the block dead-center with the Undo/Restart stack hugging its
+ * right side without moving UP. Pure geometry — no Android/Compose
+ * dependencies.
  */
 class ControlLayoutTest {
 
@@ -22,9 +23,20 @@ class ControlLayoutTest {
     private val maxScale = 220f / ControlArtwork.SHEET
     private val layout = DPadLayout.compute(maxScale)
     private val gap = ControlArtwork.GAP_FRACTION * ControlArtwork.NOMINAL_BUTTON * maxScale
+    private val hgap = ControlArtwork.SIDE_GAP_FRACTION * ControlArtwork.NOMINAL_BUTTON * maxScale
     private val secondary = ControlsLayout.SECONDARY_BUTTON
     private val content = 360f                                     // bar content width (dp)
-    private val formation = ControlsLayout.compute(content, 220f)
+    private val dpadSize = appDpadSize(content)
+    private val formation = ControlsLayout.compute(content, dpadSize)
+    // The formation is computed at the app's real (smaller) reference size,
+    // so its gaps are at that scale — not maxScale.
+    private val formationGap =
+        ControlArtwork.GAP_FRACTION * ControlArtwork.NOMINAL_BUTTON * dpadSize / ControlArtwork.SHEET
+
+    // The app's real sizing rule (ControlsBar): existing sizing, capped so
+    // the formation can never clip on narrow screens.
+    private fun appDpadSize(width: Float): Float =
+        minOf(220f, width * 0.52f, ControlsLayout.fittingDpadSize(width)).coerceAtLeast(1f)
 
     // ------------------------------------------------------- center axis --
 
@@ -57,27 +69,33 @@ class ControlLayoutTest {
     // ------------------------------------------------------------- gaps --
 
     @Test
-    fun neighbouringButtonsNeverTouchAndShareOneUniformGap() {
-        val expected = gap
-        assertTrue("gap must be visible", expected > 0f)
-        // UP bottom -> middle row top
-        assertEquals(expected, layout.left.top - layout.up.bottom, 0.0001f)
-        assertEquals(expected, layout.right.top - layout.up.bottom, 0.0001f)
-        // middle row bottom -> DOWN top
-        val midBottom = maxOf(layout.left.bottom, layout.right.bottom)
-        assertEquals(expected, layout.down.top - midBottom, 0.0001f)
-        // LEFT <-> RIGHT: the wider horizontal separation the player asked
-        // for — at least twice the vertical gap, exact by construction
-        // (plus the equal slots' sub-1% padding).
-        val sideGap = layout.right.left - layout.left.right
-        val sideExpected = ControlArtwork.SIDE_GAP_FRACTION *
-            ControlArtwork.NOMINAL_BUTTON * maxScale
-        assertTrue("LEFT/RIGHT must not touch", sideGap >= expected - 0.0001f)
-        assertTrue("LEFT/RIGHT must be clearly separated", sideGap >= 2f * expected)
-        // Exact: the wide gap plus RIGHT's slot padding ((rw - lw)/2 px).
-        val slotPad = (ControlArtwork.right.width - ControlArtwork.left.width) / 2f * maxScale
-        assertEquals("side gap is the exact SIDE_GAP_FRACTION",
-            sideExpected + slotPad, sideGap, 0.0001f)
+    fun neighbouringButtonsNeverTouchAndKeepVisibleGaps() {
+        // The single row is one band; UP floats above it with the uniform
+        // vertical gap.
+        val rowTop = minOf(layout.left.top, layout.down.top, layout.right.top)
+        assertTrue("vertical gap must be visible", gap > 0f)
+        assertEquals(gap, rowTop - layout.up.bottom, 0.0001f)
+        // The row: LEFT <-> DOWN <-> RIGHT, a generous visible gap between
+        // every adjacent pair — the three must never read as glued.
+        assertTrue("row gaps must be visible", hgap > 0f)
+        val leftDown = layout.down.left - layout.left.right
+        val downRight = layout.right.left - layout.down.right
+        assertTrue("LEFT must not touch DOWN", leftDown >= hgap - 0.0001f)
+        assertTrue("DOWN must not touch RIGHT", downRight >= hgap - 0.0001f)
+        assertTrue("LEFT/DOWN gap is generous (>= 2x vertical)",
+            leftDown >= 2f * gap)
+        assertTrue("DOWN/RIGHT gap is generous (>= 2x vertical)",
+            downRight >= 2f * gap)
+        // Exact: each adjacent gap is the SIDE_GAP_FRACTION, plus LEFT's
+        // slot padding (it is the narrowest slice, lw < slotW).
+        val slotW = maxOf(
+            ControlArtwork.left.width, ControlArtwork.down.width, ControlArtwork.right.width
+        )
+        val slotPad = (slotW - ControlArtwork.left.width) / 2f * maxScale
+        assertEquals("LEFT/DOWN gap is the exact row gap",
+            hgap + slotPad, leftDown, 0.0001f)
+        assertEquals("DOWN/RIGHT gap is the exact row gap",
+            hgap, downRight, 0.0001f)
     }
 
     @Test
@@ -106,11 +124,18 @@ class ControlLayoutTest {
     }
 
     @Test
-    fun clusterFitsInsideTheExistingReferenceFootprint() {
-        // The cross is narrower than the reference pad box the app already
-        // reserved for the D-pad, so the zones never crowd each other.
-        assertTrue(layout.width < 220f)
-        assertTrue(layout.height > layout.width)   // cross is taller than wide
+    fun theSingleRowMovementBlockIsWideAndShallowByDesign() {
+        // UP on top + one row of three (LEFT DOWN RIGHT): the block is wider
+        // than tall — a shallow rectangle — while every button stays full
+        // size and the block still contains all of them.
+        assertTrue("single row is wider than tall", layout.width > layout.height)
+        assertTrue("still at least as tall as UP", layout.height >= layout.up.height)
+        // Width is exactly three equal slots + two visible row gaps.
+        val slotW = maxOf(
+            ControlArtwork.left.width, ControlArtwork.down.width, ControlArtwork.right.width
+        ) * maxScale
+        assertEquals("width = 3 slots + 2 row gaps",
+            3f * slotW + 2f * hgap, layout.width, 0.0001f)
     }
 
     @Test
@@ -140,26 +165,26 @@ class ControlLayoutTest {
 
     @Test
     fun undoAndRestartStackImmediatelyOutsideTheCross() {
-        // Both stack buttons hug the cross box's right edge with the exact
-        // uniform gap — attached to the cross, never drifting to the edges.
+        // Both stack buttons hug the block box's right edge with the exact
+        // uniform gap — attached to the block, never drifting to the edges.
         val crossRight = formation.dpadLeft + formation.dpad.width
         assertEquals("Restart hugs RIGHT at the uniform gap",
-            gap, formation.restart.left - crossRight, 0.0001f)
+            formationGap, formation.restart.left - crossRight, 0.0001f)
         assertEquals("Undo hugs RIGHT at the same uniform gap",
-            gap, formation.undo.left - crossRight, 0.0001f)
+            formationGap, formation.undo.left - crossRight, 0.0001f)
         assertEquals("stack buttons share one left edge",
             formation.undo.left, formation.restart.left, 0.0001f)
-        // Still one compact formation: cross + gap + stack, nothing spread.
-        assertEquals(crossRight + gap + secondary, formation.width, 0.0001f)
+        // Still one compact formation: block + gap + stack, nothing spread.
+        assertEquals(crossRight + formationGap + secondary, formation.width, 0.0001f)
         assertTrue("no clipping", formation.width <= content + 0.0001f)
     }
 
     @Test
     fun undoSitsDirectlyAboveRestartInTheRightSideStack() {
         // The player's red/orange marks: Undo on top, Restart below it,
-        // both to the right of the movement cross.
+        // both to the right of the movement block.
         assertEquals(0f, formation.undo.top, 0.0001f)
-        assertEquals(secondary + gap, formation.restart.top, 0.0001f)
+        assertEquals(secondary + formationGap, formation.restart.top, 0.0001f)
         assertTrue("stack buttons never touch", formation.undo.bottom < formation.restart.top)
         assertEquals(formation.undo.centerX, formation.restart.centerX, 0.0001f)
         assertTrue("Undo is inside the box", formation.undo.bottom <= formation.height + 0.0001f)
@@ -175,13 +200,13 @@ class ControlLayoutTest {
         // screen width — the secondaries join on the right only.
         assertEquals(content / 2f, formation.dpadLeft + formation.dpad.up.centerX, 0.0001f)
         assertEquals(content / 2f, formation.dpadLeft + formation.dpad.width / 2f, 0.0001f)
-        // The formation box's bottom edge stays the cross's bottom edge: the
+        // The formation box's bottom edge stays the block's bottom edge: the
         // box only grows UPWARD (the stack's rise), so UP's on-screen
         // vertical position is preserved exactly.
         assertEquals(formation.dpadTop + formation.dpad.height, formation.height, 0.0001f)
         // The rise is exactly the annotated fraction, never so little that
-        // the stack would hang below the cross.
-        val stackHeight = 2f * secondary + gap
+        // the stack would hang below the block.
+        val stackHeight = 2f * secondary + formationGap
         val rise = maxOf(
             ControlsLayout.STACK_RISE_FRACTION * formation.dpad.height,
             stackHeight - formation.dpad.height
@@ -215,18 +240,18 @@ class ControlLayoutTest {
     fun formationFitsEveryCommonScreenAndNeverDisplacesTheCross() {
         for (screen in listOf(320f, 360f, 393f, 411f, 480f)) {
             val w = screen - 32f // the bar's 16dp horizontal padding
-            val dpadSize = minOf(220f, w * 0.52f, ControlsLayout.fittingDpadSize(w))
-                .coerceAtLeast(1f)
+            val dpadSize = appDpadSize(w)
             val c = ControlsLayout.compute(w, dpadSize)
             assertTrue("formation fits ${screen}dp", c.width <= w + 0.0001f)
-            assertTrue("cross left edge inside content", c.dpadLeft >= -0.0001f)
-            // On every real phone the pre-existing sizing rule stays binding,
-            // so the cross and UP keep their exact previous size/position.
-            assertEquals("existing sizing rule stays binding",
-                minOf(220f, w * 0.52f), dpadSize, 0.0001f)
+            assertTrue("block left edge inside content", c.dpadLeft >= -0.0001f)
+            // Buttons are never BIGGER than the app's existing sizing rule
+            // (on very narrow screens the fit cap may shrink them slightly
+            // so nothing clips).
+            assertTrue("never bigger than the existing sizing rule",
+                dpadSize <= minOf(220f, w * 0.52f) + 0.0001f)
             assertEquals("UP stays on the content's exact center axis",
                 w / 2f, c.dpadLeft + c.dpad.up.centerX, 0.0001f)
-            // Bottom edge = cross bottom on every screen: no vertical shift.
+            // Bottom edge = block bottom on every screen: no vertical shift.
             assertEquals(c.dpadTop + c.dpad.height, c.height, 0.0001f)
             assertTrue(c.restart.bottom <= c.height + 0.0001f)
         }

@@ -45,18 +45,16 @@ private const val SINK_FRACTION = 0.02f
  * Bottom control area (layout only):
  *
  *          [ UP ]  [ Undo ]
- *   [ LEFT ]   [ RIGHT ]  [ Restart ]
- *          [ DOWN ]
+ *   [ LEFT ]  [ DOWN ]  [ RIGHT ]  [ Restart ]
  *
- * The four movement buttons form the D-pad dead-center on the bar content —
- * UP keeps its exact screen axis and vertical position — with the visible
- * horizontal LEFT/RIGHT separation the player asked for (see DPadLayout),
- * and Undo stacked above Restart immediately outside RIGHT in the
- * upper-right corner (the spots the player marked in red/orange on their
- * annotated screenshot, see ControlsLayout). Buttons are slices of the
- * approved sheets at the app's existing scale (same pixels, same
- * dimensions, same behavior) — nothing about their appearance or actions
- * changes here.
+ * The movement buttons form a shallow single-row rectangle — UP on top,
+ * and LEFT / DOWN / RIGHT in one generously spaced horizontal row — centered
+ * on the bar content, so UP keeps its exact screen axis and vertical
+ * position. Undo is stacked above Restart immediately outside RIGHT (the
+ * spots the player marked in red/orange on their annotated screenshot, see
+ * ControlsLayout). Buttons are slices of the approved sheets at the app's
+ * existing scale (same pixels, same dimensions, same behavior) — nothing
+ * about their appearance or actions changes here.
  */
 @Composable
 fun ControlsBar(controller: GameController, modifier: Modifier = Modifier) {
