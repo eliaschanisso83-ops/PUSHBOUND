@@ -42,16 +42,20 @@ private val PressedDarken = ColorFilter.colorMatrix(
 private const val SINK_FRACTION = 0.02f
 
 /**
- * Bottom control area — THREE horizontal zones, layout only:
+ * Bottom control area — ONE compact centered formation, layout only:
  *
- *   [ Undo ]   [ centered movement cross ]   [ Restart ]
+ *                   [ UP ]
+ *    [ Undo ]  [ LEFT ]  [ RIGHT ]  [ Restart ]
+ *                   [ DOWN ]
  *
- * The four movement buttons form a centered D-pad with a uniform, clearly
- * visible gap between every neighbouring pair (see DPadLayout); Undo and
- * Restart sit outside the cluster on opposite sides, vertically centered
- * against it. Buttons are slices of the approved sheets at the app's
- * existing scale (same pixels, same dimensions, same behavior) — nothing
- * about their appearance or actions changes here.
+ * The four movement buttons form the centered D-pad (uniform visible gap
+ * between every neighbouring pair, see DPadLayout) with Undo immediately
+ * outside LEFT and Restart immediately outside RIGHT, vertically aligned
+ * with the LEFT/RIGHT row (see ControlsLayout). The cluster is centered
+ * horizontally, which keeps UP exactly on its previous axis and at its
+ * previous vertical position. Buttons are slices of the approved sheets at
+ * the app's existing scale (same pixels, same dimensions, same behavior) —
+ * nothing about their appearance or actions changes here.
  */
 @Composable
 fun ControlsBar(controller: GameController, modifier: Modifier = Modifier) {
@@ -62,38 +66,41 @@ fun ControlsBar(controller: GameController, modifier: Modifier = Modifier) {
             .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         // Reference size: EXACTLY the pre-existing button sizing formula, so
-        // the reorganization never changes button dimensions.
-        val dpadSize: Dp = minOf(220.dp, maxWidth * 0.52f)
-        val layout = remember(dpadSize) {
-            DPadLayout.compute(scale = dpadSize.value / ControlArtwork.SHEET.toFloat())
-        }
+        // the reorganization never changes button dimensions — plus a fit
+        // cap so the full formation can never be clipped on narrow screens.
+        val dpadSize: Dp = minOf(
+            220.dp,
+            maxWidth * 0.52f,
+            ControlsLayout.fittingDpadSize(maxWidth.value).dp
+        ).coerceAtLeast(1.dp)
+        val cluster = remember(dpadSize) { ControlsLayout.compute(dpadSize.value) }
 
-        Box(Modifier.fillMaxWidth()) {
-            // Center zone: the primary movement cluster, exactly centered
-            // regardless of the side buttons' widths.
+        // One centered cluster box: cross + secondaries placed by the pure
+        // layout math, so the secondary gaps and row alignment stay exact.
+        Box(
+            Modifier
+                .align(Alignment.Center)
+                .size(cluster.width.dp, cluster.height.dp)
+        ) {
             DPad(
                 controller = controller,
                 referenceSize = dpadSize,
-                layout = layout,
-                modifier = Modifier.align(Alignment.Center)
+                layout = cluster.dpad,
+                modifier = Modifier.offset(cluster.dpadLeft.dp, 0.dp)
             )
-
-            // Left zone: secondary action, outside the cluster.
             SecondaryButton(
                 resId = R.drawable.ui_button_undo,
                 label = "Undo",
                 enabled = controller.canUndo,
                 onClick = controller::undo,
-                modifier = Modifier.align(Alignment.CenterStart)
+                modifier = Modifier.offset(cluster.undo.left.dp, cluster.undo.top.dp)
             )
-
-            // Right zone: secondary action, mirrored.
             SecondaryButton(
                 resId = R.drawable.ui_button_restart,
                 label = "Restart",
                 enabled = true,
                 onClick = controller::restart,
-                modifier = Modifier.align(Alignment.CenterEnd)
+                modifier = Modifier.offset(cluster.restart.left.dp, cluster.restart.top.dp)
             )
         }
     }
@@ -268,7 +275,7 @@ private fun SecondaryButton(
 
     Box(
         modifier
-            .size(72.dp)
+            .size(ControlsLayout.SECONDARY_BUTTON.dp)
             .clickable(
                 interactionSource = interactionSource,
                 indication = null,

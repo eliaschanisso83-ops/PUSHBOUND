@@ -60,8 +60,8 @@ data class PlacedRect(val left: Float, val top: Float, val width: Float, val hei
  * RIGHT are equidistant from the axis. Every neighbouring pair is separated
  * by exactly the same gap (rects never touch or overlap).
  *
- * Undo and Restart are NOT part of this cluster — they live outside it on
- * the left and right of the control container (see ControlsBar).
+ * Undo and Restart join the cross via [ControlsLayout], immediately outside
+ * LEFT and RIGHT on the middle-row band.
  */
 class DPadLayout private constructor(
     val up: PlacedRect,
@@ -103,6 +103,83 @@ class DPadLayout private constructor(
                 left = PlacedRect((slotW - lw) / 2f, midTop + (midH - lh) / 2f, lw, lh),
                 right = PlacedRect(width - slotW + (slotW - rw) / 2f, midTop + (midH - rh) / 2f, rw, rh),
                 down = PlacedRect((width - dw) / 2f, midTop + midH + gap, dw, dh),
+                width = width,
+                height = height
+            )
+        }
+    }
+}
+
+/**
+ * The complete bottom control formation — the centered cross PLUS Undo and
+ * Restart hugging it (layout only, no appearance changes):
+ *
+ *                       [ UP ]
+ *        [UNDO]  [ LEFT ] [ RIGHT ]  [RESTART]
+ *                       [ DOWN ]
+ *
+ * One cluster box, centered horizontally by the caller:
+ *
+ *  - Undo sits immediately outside LEFT with the uniform gap; Restart is
+ *    its mirror immediately outside RIGHT (never near the screen edges,
+ *    never touching the movement buttons);
+ *  - both secondaries are vertically centered on the LEFT/RIGHT row band;
+ *  - the side spans (secondary + gap) are equal, so the cross — and
+ *    therefore UP, the layout's anchor — keeps the exact horizontal center
+ *    and top position it had before, whatever the screen width.
+ *
+ * All coordinates are dp from the cluster's top-left corner.
+ */
+class ControlsLayout(
+    val dpad: DPadLayout,
+    val dpadLeft: Float,
+    val undo: PlacedRect,
+    val restart: PlacedRect,
+    val width: Float,
+    val height: Float
+) {
+    companion object {
+
+        /** Fixed secondary button size (unchanged appearance), in dp. */
+        const val SECONDARY_BUTTON = 72f
+
+        /**
+         * Largest cross reference size ([ControlsBar]'s `dpadSize`) whose
+         * full formation still fits into [containerWidth] dp of bar content.
+         * The formation width is exactly linear in the reference size, so
+         * this closed form needs no magic constants. The app's existing
+         * min(220dp, width x 0.52) rule stays binding on every real phone;
+         * this term only guarantees the cluster can never be clipped.
+         */
+        fun fittingDpadSize(containerWidth: Float): Float {
+            val unitWidth = 2f * ControlArtwork.GAP_FRACTION * ControlArtwork.NOMINAL_BUTTON +
+                DPadLayout.compute(1f).width
+            return (containerWidth - 2f * SECONDARY_BUTTON) / unitWidth * ControlArtwork.SHEET
+        }
+
+        fun compute(dpadSize: Float, secondarySize: Float = SECONDARY_BUTTON): ControlsLayout {
+            require(dpadSize > 0f) { "dpadSize must be positive" }
+            require(secondarySize > 0f) { "secondarySize must be positive" }
+            val scale = dpadSize / ControlArtwork.SHEET
+            val dpad = DPadLayout.compute(scale)
+            val gap = ControlArtwork.GAP_FRACTION * ControlArtwork.NOMINAL_BUTTON * scale
+
+            // Secondaries share the vertical center of the LEFT/RIGHT band
+            // (clamped inside the cluster on tiny reference sizes).
+            val rowCenterY = dpad.left.centerY
+            val undoTop = maxOf(0f, rowCenterY - secondarySize / 2f)
+
+            // Equal side spans: secondary + uniform gap on each side of the
+            // cross box, which keeps the cross dead-center in the cluster.
+            val dpadLeft = secondarySize + gap
+            val width = dpadLeft + dpad.width + gap + secondarySize
+            val height = maxOf(dpad.height, undoTop + secondarySize)
+
+            return ControlsLayout(
+                dpad = dpad,
+                dpadLeft = dpadLeft,
+                undo = PlacedRect(0f, undoTop, secondarySize, secondarySize),
+                restart = PlacedRect(width - secondarySize, undoTop, secondarySize, secondarySize),
                 width = width,
                 height = height
             )

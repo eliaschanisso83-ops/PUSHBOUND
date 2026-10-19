@@ -2,6 +2,7 @@ package com.pushbound.game
 
 import com.pushbound.game.ui.ArtworkSlice
 import com.pushbound.game.ui.ControlArtwork
+import com.pushbound.game.ui.ControlsLayout
 import com.pushbound.game.ui.DPadLayout
 import com.pushbound.game.ui.PlacedRect
 import org.junit.Assert.assertEquals
@@ -19,6 +20,8 @@ class ControlLayoutTest {
     private val maxScale = 220f / ControlArtwork.SHEET
     private val layout = DPadLayout.compute(maxScale)
     private val gap = ControlArtwork.GAP_FRACTION * ControlArtwork.NOMINAL_BUTTON * maxScale
+    private val secondary = ControlsLayout.SECONDARY_BUTTON
+    private val cluster = ControlsLayout.compute(220f)
 
     // ------------------------------------------------------- center axis --
 
@@ -119,5 +122,75 @@ class ControlLayoutTest {
         assertEquals(big.width / big.height, small.width / small.height, 0.001f)
         assertEquals(small.width / 2f, small.up.centerX, 0.0001f)
         assertEquals(small.width / 2f, small.down.centerX, 0.0001f)
+    }
+
+    // --------------------------------------- compact formation (2) --
+
+    @Test
+    fun undoAndRestartSitImmediatelyOutsideTheCross() {
+        // Gap measured against the visible LEFT button edge: the uniform gap
+        // plus the cross box's own sub-dp left margin (never more than 1dp).
+        val leftGap = (cluster.dpadLeft + cluster.dpad.left.left) - cluster.undo.right
+        val rightGap = cluster.restart.left - (cluster.dpadLeft + cluster.dpad.right.right)
+        assertTrue("Undo must not touch LEFT", leftGap >= gap - 0.0001f)
+        assertTrue("Undo must hug LEFT — no huge void", leftGap <= gap + 1f)
+        assertEquals("Restart hugs RIGHT at the uniform gap", gap, rightGap, 0.0001f)
+        // Secondary buttons frame the cross, they do not drift to the edges
+        // of the formation box.
+        assertEquals(0f, cluster.undo.left, 0.0001f)
+        assertEquals(cluster.width, cluster.restart.right, 0.0001f)
+    }
+
+    @Test
+    fun secondariesAlignWithTheLeftRightRow() {
+        assertEquals("Undo shares the LEFT/RIGHT band center",
+            cluster.dpad.left.centerY, cluster.undo.centerY, 0.0001f)
+        assertEquals("Restart shares the LEFT/RIGHT band center",
+            cluster.dpad.right.centerY, cluster.restart.centerY, 0.0001f)
+        assertEquals(cluster.undo.centerY, cluster.restart.centerY, 0.0001f)
+    }
+
+    @Test
+    fun crossKeepsItsExactCenterAxisAndTopWhenSecondariesJoin() {
+        // UP is the layout's anchor: the equal side spans keep the cross —
+        // and therefore UP — on the cluster's exact center axis and top
+        // edge, so its screen position never changes with this correction.
+        assertEquals(cluster.width / 2f, cluster.dpadLeft + cluster.dpad.width / 2f, 0.0001f)
+        assertEquals(cluster.width / 2f, cluster.dpadLeft + cluster.dpad.up.centerX, 0.0001f)
+        assertEquals(0f, cluster.dpad.up.top, 0.0001f)
+        // Bar height still equals the cross height: no layout shift above.
+        assertEquals(cluster.dpad.height, cluster.height, 0.0001f)
+    }
+
+    @Test
+    fun secondaryButtonsNeverTouchOrOverlapTheMovementButtons() {
+        assertTrue("Undo must stay outside LEFT",
+            cluster.undo.right <= cluster.dpadLeft + cluster.dpad.left.left + 0.0001f)
+        assertTrue("Restart must stay outside RIGHT",
+            cluster.restart.left >= cluster.dpadLeft + cluster.dpad.right.right - 0.0001f)
+        for (rect in listOf(cluster.undo, cluster.restart)) {
+            assertTrue(rect.left >= 0f && rect.top >= 0f)
+            assertTrue(rect.right <= cluster.width + 0.0001f)
+            assertTrue(rect.bottom <= cluster.height + 0.0001f)
+        }
+        // The whole formation stays compact: cross + one button + one gap
+        // on each side, nothing distributed across the screen width.
+        assertTrue(cluster.width <= cluster.dpad.width + 2f * secondary + 2f * gap + 0.0001f)
+    }
+
+    @Test
+    fun formationFitsEveryCommonScreenAndNeverDisplacesTheCross() {
+        for (screen in listOf(320f, 360f, 393f, 411f, 480f)) {
+            val content = screen - 32f // the bar's 16dp horizontal padding
+            val dpadSize = minOf(220f, content * 0.52f, ControlsLayout.fittingDpadSize(content))
+                .coerceAtLeast(1f)
+            val c = ControlsLayout.compute(dpadSize)
+            assertTrue("formation fits ${screen}dp", c.width <= content + 0.0001f)
+            // On every real phone the pre-existing sizing rule stays binding,
+            // so the cross and UP keep their exact previous size/position.
+            assertEquals("existing sizing rule stays binding",
+                minOf(220f, content * 0.52f), dpadSize, 0.0001f)
+            assertEquals(c.width / 2f, c.dpadLeft + c.dpad.up.centerX, 0.0001f)
+        }
     }
 }
