@@ -74,7 +74,13 @@ fun GameScreen() {
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        val landscape = GameLayout.isLandscape(maxWidth.value, maxHeight.value)
+        val windowWidth = maxWidth.value
+        val windowHeight = maxHeight.value
+        val landscape = GameLayout.isLandscape(windowWidth, windowHeight)
+        // Hoisted out of the Row/Column scopes below: the panel width is pure
+        // window arithmetic, computed once from the measured window.
+        val controlPanelWidth =
+            GameLayout.landscapeControlPanelWidth(windowWidth, windowHeight).dp
 
         Column(
             Modifier
@@ -102,15 +108,7 @@ fun GameScreen() {
                                 vertical = GameLayout.BOARD_PADDING_V_DP.dp
                             )
                     )
-                    ControlsBar(
-                        controller,
-                        Modifier.width(
-                            GameLayout.landscapeControlPanelWidth(
-                                maxWidth.value,
-                                maxHeight.value
-                            ).dp
-                        )
-                    )
+                    ControlsBar(controller, Modifier.width(controlPanelWidth))
                 }
             } else {
                 Row(
