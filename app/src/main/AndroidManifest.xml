@@ -8,10 +8,18 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Pushbound">
 
+        <!--
+            No forced orientation: the window rotates naturally between
+            PORTRAIT and LANDSCAPE and the single gameplay screen adapts
+            (GameScreen/GameLayout). The activity handles the configuration
+            change itself so rotation is a pure UI change — the level,
+            player, boxes, moves and undo history are never reset.
+        -->
         <activity
             android:name=".MainActivity"
             android:configChanges="keyboardHidden|orientation|screenSize|screenLayout|uiMode"
-            android:exported="true">
+            android:exported="true"
+            android:screenOrientation="unspecified">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

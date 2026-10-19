@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -55,13 +54,18 @@ private const val SINK_FRACTION = 0.02f
  * ControlsLayout). Buttons are slices of the approved sheets at the app's
  * existing scale (same pixels, same dimensions, same behavior) — nothing
  * about their appearance or actions changes here.
+ *
+ * Orientation only changes WHERE this bar is placed: the portrait column
+ * gives it the full window width, landscape gives it a fixed-width panel on
+ * the right (see [GameLayout]). Either way it is sized purely from its own
+ * measured width by [ControlsLayout], so the buttons never change. System
+ * bar / gesture insets are applied once by [GameScreen], not here.
  */
 @Composable
 fun ControlsBar(controller: GameController, modifier: Modifier = Modifier) {
     BoxWithConstraints(
         modifier
             .fillMaxWidth()
-            .navigationBarsPadding()
             .padding(horizontal = 16.dp, vertical = 10.dp)
     ) {
         // Reference size: EXACTLY the pre-existing button sizing formula, so

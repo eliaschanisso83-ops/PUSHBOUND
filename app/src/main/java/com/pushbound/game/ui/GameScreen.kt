@@ -4,14 +4,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -31,30 +36,101 @@ import androidx.compose.ui.unit.sp
 import com.pushbound.game.Levels
 
 /**
- * Mobile-first composition: subtle level/move header, the board taking the
- * majority of the screen, and the controls anchored at the bottom within thumb
- * reach. System bars are respected via edge-to-edge insets.
+ * Mobile-first, ORIENTATION-AWARE composition. The window itself rotates
+ * (no fake canvas rotation) and this screen re-arranges the same parts for
+ * the measured window size — see [GameLayout]:
+ *
+ *  - PORTRAIT (unchanged, the primary presentation):
+ *
+ *        [ level / moves HUD ]
+ *        [      board       ]
+ *        [ control bar       ]
+ *
+ *  - LANDSCAPE (responsive, the window is wider than it is tall):
+ *
+ *        [ level / moves HUD ]
+ *        [  board  | controls ]
+ *
+ *    The board keeps the largest practical SQUARE cell size because the
+ *    controls sit BESIDE it instead of below it (landscape height, not
+ *    width, is what would otherwise crush a stacked layout). The control
+ *    bar keeps its exact portrait button sizes and relative geometry; only
+ *    its position on screen changes.
+ *
+ * System bars / gesture area are respected ONCE, for both orientations, via
+ * a single safeDrawing inset pass. The [GameController] lives above the
+ * orientation branch, so rotating is a pure UI/configuration change and the
+ * level, player, boxes, goals, move counter and undo history all survive.
  */
 @Composable
 fun GameScreen() {
     val scope = rememberCoroutineScope()
     val controller = remember(scope) { GameController(Levels.first, scope) }
 
-    Box(
+    // Reading the measured window makes the branch re-compose on the very
+    // first layout pass after the physical rotation, for any aspect ratio.
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
     ) {
-        Column(Modifier.fillMaxSize()) {
+        val landscape = GameLayout.isLandscape(maxWidth.value, maxHeight.value)
+
+        Column(
+            Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+        ) {
             LevelHeader(controller, Modifier.fillMaxWidth())
-            BoardView(
-                controller,
-                Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
-            )
-            ControlsBar(controller)
+
+            if (landscape) {
+                // Board left / controls right, both vertically centred on the
+                // same axis so the screen reads as one balanced arrangement.
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    BoardView(
+                        controller,
+                        Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .padding(
+                                horizontal = GameLayout.BOARD_PADDING_H_DP.dp,
+                                vertical = GameLayout.BOARD_PADDING_V_DP.dp
+                            )
+                    )
+                    ControlsBar(
+                        controller,
+                        Modifier.width(
+                            GameLayout.landscapeControlPanelWidth(
+                                maxWidth.value,
+                                maxHeight.value
+                            ).dp
+                        )
+                    )
+                }
+            } else {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    BoardView(
+                        controller,
+                        Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .padding(
+                                horizontal = GameLayout.BOARD_PADDING_H_DP.dp,
+                                vertical = GameLayout.BOARD_PADDING_V_DP.dp
+                            )
+                    )
+                }
+                ControlsBar(controller)
+            }
         }
         CompletionOverlay(controller)
     }
@@ -64,7 +140,6 @@ fun GameScreen() {
 private fun LevelHeader(controller: GameController, modifier: Modifier) {
     Row(
         modifier
-            .statusBarsPadding()
             .padding(horizontal = 22.dp, vertical = 14.dp),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
