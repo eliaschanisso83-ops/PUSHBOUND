@@ -9,7 +9,9 @@ import com.pushbound.game.ui.Anchor
 import com.pushbound.game.ui.ApprovedSprites
 import com.pushbound.game.ui.BoardGeometry
 import com.pushbound.game.ui.BoardSprites
+import com.pushbound.game.ui.CharacterFrames
 import com.pushbound.game.ui.SpritePlacement
+import com.pushbound.game.ui.SpriteSubject
 import com.pushbound.game.ui.WallTiling
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -236,5 +238,74 @@ class BoardLayoutTest {
         }
         // after the documented push the box sits exactly one cell right
         assertTrue(Position(4, 4) in state.boxes)
+    }
+
+    // ------------------------------------------------- directional frames --
+
+    @Test
+    fun frameSubjectsMatchTheNormalizedDeliveryMeasurements() {
+        // Pinned from tools/png_bbox.sh on the approved delivery (md5-verified):
+        // all frames normalized to the master's height 773 and bottom row 901.
+        val frames = mapOf(
+            "down" to ApprovedSprites.player,
+            "up" to ApprovedSprites.playerUp,
+            "left" to ApprovedSprites.playerLeft,
+            "right" to ApprovedSprites.playerRight
+        )
+        frames.forEach { (name, subject) ->
+            assertEquals("$name frame height", 773, subject.height)
+            assertEquals("$name frame bottom row", 901, subject.y + subject.height - 1)
+        }
+        assertEquals(378, ApprovedSprites.player.width)   // front (master)
+        assertEquals(356, ApprovedSprites.playerUp.width) // rear
+        assertEquals(193, ApprovedSprites.playerLeft.width)   // profile
+        assertEquals(193, ApprovedSprites.playerRight.width)  // profile
+    }
+
+    @Test
+    fun directionChangeNeverMovesResizesOrReanchorsTheCharacter() {
+        val g = BoardGeometry(9, 8, 48f, 4f, 6f)
+        val rects = Direction.entries.associateWith {
+            BoardSprites.playerFrames.rectIn(g, 3f, 2f, it)
+        }
+        val down = rects.getValue(Direction.DOWN)
+        rects.forEach { (facing, rect) ->
+            assertEquals("$facing height", down.height, rect.height, 0.0001f)
+            assertEquals("$facing top", down.top, rect.top, 0.0001f)
+            assertEquals("$facing bottom (ground line)", down.bottom, rect.bottom, 0.0001f)
+            assertEquals("$facing center x", down.centerX, rect.centerX, 0.0001f)
+        }
+        // profile frames are naturally narrower, never wider
+        assertTrue(rects.getValue(Direction.LEFT).width < down.width)
+        assertTrue(rects.getValue(Direction.RIGHT).width < down.width)
+        assertEquals(rects.getValue(Direction.LEFT).width, rects.getValue(Direction.RIGHT).width, 0.0001f)
+    }
+
+    @Test
+    fun downFrameReproducesTheLegacyPlayerPlacementExactly() {
+        val g = BoardGeometry(9, 8, 61f, 3f, 5f)
+        val legacy = BoardSprites.player.rectIn(g, 4f, 3f)
+        val down = BoardSprites.playerFrames.rectIn(g, 4f, 3f, Direction.DOWN)
+        assertEquals(legacy.left, down.left, 0.0001f)
+        assertEquals(legacy.top, down.top, 0.0001f)
+        assertEquals(legacy.width, down.width, 0.0001f)
+        assertEquals(legacy.height, down.height, 0.0001f)
+    }
+
+    @Test
+    fun characterFramesRejectFramesThatWouldChangeTheScale() {
+        val mismatchedHeight = mapOf(
+            Direction.DOWN to ApprovedSprites.player,
+            Direction.UP to ApprovedSprites.playerUp,
+            Direction.LEFT to ApprovedSprites.playerLeft,
+            Direction.RIGHT to SpriteSubject(411, 129, 193, 700)
+        )
+        val thrown = try {
+            CharacterFrames(ApprovedSprites.player, 0.42f, mismatchedHeight)
+            null
+        } catch (e: IllegalArgumentException) {
+            e
+        }
+        assertTrue(thrown != null)
     }
 }

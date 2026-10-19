@@ -1,5 +1,6 @@
 package com.pushbound.game.ui
 
+import com.pushbound.game.engine.Direction
 import kotlin.math.min
 
 /**
@@ -74,6 +75,15 @@ object ApprovedSprites {
     val goal = SpriteSubject(105, 102, 807, 819)
     val player = SpriteSubject(319, 129, 378, 773)
 
+    // Directional character frames (Milestone 5). The approved master above
+    // is the DOWN frame; the other three were generated from it, processed
+    // and normalized to the master's exact constants (subject height 773,
+    // subject bottom row 901, subject cx ~507.5 in the 1024 frame), measured
+    // with tools/png_bbox.sh after processing:
+    val playerUp = SpriteSubject(330, 129, 356, 773)      // rear view, shoulders slightly narrower
+    val playerLeft = SpriteSubject(411, 129, 193, 773)    // profile; intrinsically half as wide
+    val playerRight = SpriteSubject(411, 129, 193, 773)   // profile; identical metrics to left
+
     // Wall internals, located with tools/png_rowprofile.sh (per-row brightness):
     // mortar lines sit at y=392..395 (joint under the cap) and y=529/576/619
     // (course joints of the lower face).
@@ -121,6 +131,48 @@ data class SpritePlacement(
 }
 
 /**
+ * The four directional frames of the ONE approved character. All frames were
+ * normalized to the master's exact subject constants (height 773, bottom row
+ * 901, cx ~507.5), so the set shares ONE scale, ONE ground line and ONE
+ * center. To guarantee the character never jumps in size or position when the
+ * facing changes (direction change = sprite change), every frame is scaled by
+ * the SAME factor — derived from the master subject and its footprint, never
+ * from an individual frame's own width — and placed by its own measured
+ * subject rect on the shared bottom-center anchor. Profile frames are
+ * intrinsically narrower; their height, baseline and center are identical.
+ */
+data class CharacterFrames(
+    val scaleSubject: SpriteSubject,
+    val footprint: Float,
+    val frames: Map<Direction, SpriteSubject>
+) {
+    init {
+        require(Direction.entries.all { it in frames }) {
+            "CharacterFrames needs one subject per direction"
+        }
+        val referenceHeight = scaleSubject.height
+        frames.values.forEach { subject ->
+            require(subject.height == referenceHeight) {
+                "All directional frames must share the master subject height " +
+                    "($referenceHeight) so direction changes cannot resize the character"
+            }
+        }
+    }
+
+    fun subjectFor(facing: Direction): SpriteSubject = frames.getValue(facing)
+
+    fun rectIn(geometry: BoardGeometry, col: Float, row: Float, facing: Direction): CellRect {
+        val scale = footprint * geometry.cellSize / scaleSubject.width
+        val subject = frames.getValue(facing)
+        val width = subject.width * scale
+        val height = subject.height * scale
+        val left = geometry.cellCenterX(col) - width / 2f
+        val top = geometry.cellTop(row + 1) - height
+        return CellRect(left, top, width, height)
+    }
+}
+
+/**
  * Gameplay footprints. Values chosen against the measured subjects:
  * wall = full cell width so adjacent wall cells connect continuously;
  * box = 0.74 (controlled margin, clearly one cell); goal = 0.86 (a flat pad,
@@ -133,6 +185,18 @@ object BoardSprites {
     val box = SpritePlacement(ApprovedSprites.box, 0.74f, Anchor.GROUND_LINE)
     val goal = SpritePlacement(ApprovedSprites.goal, 0.86f, Anchor.FLOOR_PLANE)
     val player = SpritePlacement(ApprovedSprites.player, 0.42f, Anchor.GROUND_LINE)
+
+    /** Directional character set: master = DOWN/scale reference. */
+    val playerFrames = CharacterFrames(
+        scaleSubject = ApprovedSprites.player,
+        footprint = 0.42f,
+        frames = mapOf(
+            Direction.DOWN to ApprovedSprites.player,
+            Direction.UP to ApprovedSprites.playerUp,
+            Direction.LEFT to ApprovedSprites.playerLeft,
+            Direction.RIGHT to ApprovedSprites.playerRight
+        )
+    )
 }
 
 /**

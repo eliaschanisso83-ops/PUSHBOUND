@@ -7,5 +7,12 @@ package com.pushbound.game.engine
 data class GameState(
     val player: Position,
     val boxes: Set<Position>,
-    val moves: Int
+    val moves: Int,
+
+    /**
+     * Direction of the last successful move; the renderer swaps the
+     * directional character frame to match. Starts facing DOWN (toward the
+     * viewer), undo/redo of snapshots restores the facing they carried.
+     */
+    val facing: Direction = Direction.DOWN
 )

@@ -24,6 +24,8 @@ object GameEngine {
      *  - empty floor ahead: the player steps.
      *  - box ahead with free floor behind it: the player pushes it one cell.
      *  - wall, board edge, second box, or a completed level: [MoveResult.Blocked].
+     * Every successful move (pushes included) records its [direction] as the
+     * new facing; blocked moves leave the state — and the facing — untouched.
      */
     fun move(level: LevelDefinition, state: GameState, direction: Direction): MoveResult {
         if (isComplete(level, state)) return MoveResult.Blocked
@@ -34,7 +36,11 @@ object GameEngine {
         if (target !in state.boxes) {
             return MoveResult.Moved(
                 previous = state,
-                state = state.copy(player = target, moves = state.moves + 1),
+                state = state.copy(
+                    player = target,
+                    moves = state.moves + 1,
+                    facing = direction
+                ),
                 pushedBox = null
             )
         }
@@ -47,7 +53,8 @@ object GameEngine {
             state = state.copy(
                 player = target,
                 boxes = state.boxes - target + beyond,
-                moves = state.moves + 1
+                moves = state.moves + 1,
+                facing = direction
             ),
             pushedBox = target to beyond
         )

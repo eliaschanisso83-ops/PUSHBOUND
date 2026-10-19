@@ -31,6 +31,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pushbound.game.R
+import com.pushbound.game.engine.Direction
 import com.pushbound.game.engine.Position
 import kotlin.math.roundToInt
 
@@ -51,7 +52,10 @@ fun BoardView(controller: GameController, modifier: Modifier = Modifier) {
     val wall = rememberGameBitmap(R.drawable.environment_wall_straight)
     val goal = rememberGameBitmap(R.drawable.object_goal)
     val box = rememberGameBitmap(R.drawable.object_box)
-    val player = rememberGameBitmap(R.drawable.character_idle)
+    val player = rememberGameBitmap(R.drawable.character_idle) // DOWN frame (approved master)
+    val playerUp = rememberGameBitmap(R.drawable.character_idle_up)
+    val playerLeft = rememberGameBitmap(R.drawable.character_idle_left)
+    val playerRight = rememberGameBitmap(R.drawable.character_idle_right)
     val textMeasurer = rememberTextMeasurer()
 
     val state = controller.state
@@ -166,7 +170,21 @@ fun BoardView(controller: GameController, modifier: Modifier = Modifier) {
                 }
 
                 // --- player: ground-line anchored, animated in grid coords --
-                BoardSprites.player.draw(this, player, geometry, playerAnim.value.x, playerAnim.value.y)
+                // Direction change = sprite change: the frame follows the
+                // engine's facing on the SAME common scale/anchor, so the
+                // character turns in place without jumping, resizing or
+                // shifting (all four frames share one height, ground line
+                // and center — see CharacterFrames).
+                val facing = state.facing
+                val frameImage = when (facing) {
+                    Direction.UP -> playerUp
+                    Direction.LEFT -> playerLeft
+                    Direction.RIGHT -> playerRight
+                    Direction.DOWN -> player
+                }
+                BoardSprites.playerFrames.drawFrame(
+                    this, frameImage, geometry, playerAnim.value.x, playerAnim.value.y, facing
+                )
 
                 // --- development-only grid overlay (off by default) ---------
                 if (DebugGridConfig.ENABLED) {
@@ -195,6 +213,22 @@ private fun ImageBitmap.drawSubject(
 /** Places one sprite's subject into the logical cell via its footprint. */
 private fun SpritePlacement.draw(scope: DrawScope, image: ImageBitmap, geometry: BoardGeometry, col: Float, row: Float) {
     val rect = rectIn(geometry, col, row)
+    scope.drawImage(
+        image = image,
+        srcOffset = IntOffset(subject.x, subject.y),
+        srcSize = IntSize(subject.width, subject.height),
+        dstOffset = IntOffset(rect.left.roundToInt(), rect.top.roundToInt()),
+        dstSize = IntSize(rect.width.roundToInt(), rect.height.roundToInt())
+    )
+}
+
+/** Places one directional character frame on the shared scale/anchor. */
+private fun CharacterFrames.drawFrame(
+    scope: DrawScope, image: ImageBitmap, geometry: BoardGeometry,
+    col: Float, row: Float, facing: Direction
+) {
+    val rect = rectIn(geometry, col, row, facing)
+    val subject = subjectFor(facing)
     scope.drawImage(
         image = image,
         srcOffset = IntOffset(subject.x, subject.y),
