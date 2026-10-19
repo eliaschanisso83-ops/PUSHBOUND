@@ -84,6 +84,28 @@ object ApprovedSprites {
     val playerLeft = SpriteSubject(411, 129, 193, 773)    // profile; intrinsically half as wide
     val playerRight = SpriteSubject(411, 129, 193, 773)   // profile; identical metrics to left
 
+    // Character Animation System frames (approved 12-frame delivery, Stage B).
+    // Soft bounding boxes (alpha > 16) measured with tools/png_profile on the
+    // md5-verified files in res/drawable-nodpi: every frame was normalized to
+    // the same constants as the idle masters — subject y = 129, height = 773,
+    // bottom row = 901, cx ~ 507.5 — so walk/push/idle frames share ONE
+    // scale, ONE ground line and ONE center. Stride frames are intrinsically
+    // wider than their idle counterpart (legs split), push_right widest
+    // (deep lunge); widths only change the drawn width, never the height,
+    // the ground line or the anchor (CharacterFrames shares one scale).
+    val walkDownA = SpriteSubject(350, 129, 315, 773)
+    val walkDownB = SpriteSubject(346, 129, 324, 773)
+    val walkUpA = SpriteSubject(346, 129, 323, 773)
+    val walkUpB = SpriteSubject(350, 129, 315, 773)
+    val walkLeftA = SpriteSubject(273, 129, 470, 773)
+    val walkLeftB = SpriteSubject(246, 129, 523, 773)
+    val walkRightA = SpriteSubject(262, 129, 491, 773)
+    val walkRightB = SpriteSubject(252, 129, 511, 773)
+    val pushDown = SpriteSubject(308, 129, 399, 773)
+    val pushUp = SpriteSubject(348, 129, 320, 773)
+    val pushLeft = SpriteSubject(208, 129, 600, 773)
+    val pushRight = SpriteSubject(154, 129, 708, 773)
+
     // Wall internals, located with tools/png_profile.c (per-row/column mean
     // brightness on the approved strip). The material bands are:
     //   cap course   y[332..391]  large lit bricks seen slightly from above
@@ -154,11 +176,21 @@ data class SpritePlacement(
  * from an individual frame's own width — and placed by its own measured
  * subject rect on the shared bottom-center anchor. Profile frames are
  * intrinsically narrower; their height, baseline and center are identical.
+ *
+ * The animation poses ([CharacterPose]) add three more complete directional
+ * sets — STRIDE_A, STRIDE_B and PUSH — on the exact same contract: because
+ * every pose frame shares height 773 with the idle masters, pose changes
+ * (step phase, push, settle) can neither resize the character nor move its
+ * ground line or center; only the drawn width follows the pose art, exactly
+ * like the approved profile/idle width differences.
  */
 data class CharacterFrames(
     val scaleSubject: SpriteSubject,
     val footprint: Float,
-    val frames: Map<Direction, SpriteSubject>
+    val frames: Map<Direction, SpriteSubject>,
+    val walkA: Map<Direction, SpriteSubject> = emptyMap(),
+    val walkB: Map<Direction, SpriteSubject> = emptyMap(),
+    val pushFrames: Map<Direction, SpriteSubject> = emptyMap()
 ) {
     init {
         require(Direction.entries.all { it in frames }) {
@@ -171,13 +203,37 @@ data class CharacterFrames(
                     "($referenceHeight) so direction changes cannot resize the character"
             }
         }
+        listOf("walk" to walkA, "walk" to walkB, "push" to pushFrames).forEach { (name, set) ->
+            if (set.isEmpty()) return@forEach
+            require(Direction.entries.all { it in set }) {
+                "CharacterFrames needs one $name frame per direction"
+            }
+            set.values.forEach { subject ->
+                require(subject.height == referenceHeight) {
+                    "All $name frames must share the master subject height " +
+                        "($referenceHeight) so pose changes cannot resize the character"
+                }
+            }
+        }
     }
 
-    fun subjectFor(facing: Direction): SpriteSubject = frames.getValue(facing)
+    fun subjectFor(facing: Direction, pose: CharacterPose = CharacterPose.IDLE): SpriteSubject =
+        when (pose) {
+            CharacterPose.IDLE -> frames.getValue(facing)
+            CharacterPose.STRIDE_A -> walkA[facing] ?: frames.getValue(facing)
+            CharacterPose.STRIDE_B -> walkB[facing] ?: frames.getValue(facing)
+            CharacterPose.PUSH -> pushFrames[facing] ?: frames.getValue(facing)
+        }
 
-    fun rectIn(geometry: BoardGeometry, col: Float, row: Float, facing: Direction): CellRect {
+    fun rectIn(
+        geometry: BoardGeometry,
+        col: Float,
+        row: Float,
+        facing: Direction,
+        pose: CharacterPose = CharacterPose.IDLE
+    ): CellRect {
         val scale = footprint * geometry.cellSize / scaleSubject.width
-        val subject = frames.getValue(facing)
+        val subject = subjectFor(facing, pose)
         val width = subject.width * scale
         val height = subject.height * scale
         val left = geometry.cellCenterX(col) - width / 2f
@@ -209,6 +265,24 @@ object BoardSprites {
             Direction.UP to ApprovedSprites.playerUp,
             Direction.LEFT to ApprovedSprites.playerLeft,
             Direction.RIGHT to ApprovedSprites.playerRight
+        ),
+        walkA = mapOf(
+            Direction.DOWN to ApprovedSprites.walkDownA,
+            Direction.UP to ApprovedSprites.walkUpA,
+            Direction.LEFT to ApprovedSprites.walkLeftA,
+            Direction.RIGHT to ApprovedSprites.walkRightA
+        ),
+        walkB = mapOf(
+            Direction.DOWN to ApprovedSprites.walkDownB,
+            Direction.UP to ApprovedSprites.walkUpB,
+            Direction.LEFT to ApprovedSprites.walkLeftB,
+            Direction.RIGHT to ApprovedSprites.walkRightB
+        ),
+        pushFrames = mapOf(
+            Direction.DOWN to ApprovedSprites.pushDown,
+            Direction.UP to ApprovedSprites.pushUp,
+            Direction.LEFT to ApprovedSprites.pushLeft,
+            Direction.RIGHT to ApprovedSprites.pushRight
         )
     )
 }

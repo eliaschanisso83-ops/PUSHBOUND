@@ -10,6 +10,7 @@ import com.pushbound.game.ui.ApprovedSprites
 import com.pushbound.game.ui.BoardGeometry
 import com.pushbound.game.ui.BoardSprites
 import com.pushbound.game.ui.CharacterFrames
+import com.pushbound.game.ui.CharacterPose
 import com.pushbound.game.ui.SpritePlacement
 import com.pushbound.game.ui.SpriteSubject
 import com.pushbound.game.ui.WallTiling
@@ -340,5 +341,146 @@ class BoardLayoutTest {
             e
         }
         assertTrue(thrown != null)
+    }
+
+    @Test
+    fun animationPoseFramesShareTheMasterHeightAndGroundLine() {
+        // The 12 approved animation frames (walk A/B + push, four directions)
+        // are pinned from tools/png_profile soft bboxes (alpha > 16) on the
+        // md5-verified deliveries: every frame normalized to the masters'
+        // subject constants — y = 129, height = 773, bottom row = 901.
+        val poseSubjects = mapOf(
+            "walk_down_a" to ApprovedSprites.walkDownA,
+            "walk_down_b" to ApprovedSprites.walkDownB,
+            "walk_up_a" to ApprovedSprites.walkUpA,
+            "walk_up_b" to ApprovedSprites.walkUpB,
+            "walk_left_a" to ApprovedSprites.walkLeftA,
+            "walk_left_b" to ApprovedSprites.walkLeftB,
+            "walk_right_a" to ApprovedSprites.walkRightA,
+            "walk_right_b" to ApprovedSprites.walkRightB,
+            "push_down" to ApprovedSprites.pushDown,
+            "push_up" to ApprovedSprites.pushUp,
+            "push_left" to ApprovedSprites.pushLeft,
+            "push_right" to ApprovedSprites.pushRight
+        )
+        assertEquals(12, poseSubjects.size)
+        poseSubjects.forEach { (name, subject) ->
+            assertEquals("$name height", 773, subject.height)
+            assertEquals("$name bottom row", 901, subject.y + subject.height - 1)
+        }
+    }
+
+    @Test
+    fun everyPoseHasOneFramePerDirectionAndNoSilentFallback() {
+        val frames = BoardSprites.playerFrames
+        CharacterPose.entries.forEach { pose ->
+            Direction.entries.forEach { facing ->
+                assertEquals(
+                    "$pose/$facing frame must be a dedicated measured subject",
+                    773,
+                    frames.subjectFor(facing, pose).height
+                )
+            }
+        }
+        // The production set is complete: each pose map covers all directions
+        // (CharacterFrames would otherwise fall back to the idle frame).
+        assertEquals(4, frames.walkA.size)
+        assertEquals(4, frames.walkB.size)
+        assertEquals(4, frames.pushFrames.size)
+        // Stride frames must differ from each other — an A/B pair that is
+        // accidentally identical would freeze the alternating-leg illusion.
+        Direction.entries.forEach { facing ->
+            assertTrue(
+                "walk A and B must differ for $facing",
+                frames.subjectFor(facing, CharacterPose.STRIDE_A) !=
+                    frames.subjectFor(facing, CharacterPose.STRIDE_B)
+            )
+        }
+    }
+
+    @Test
+    fun poseChangeNeverMovesOrResizesTheCharacter() {
+        val g = BoardGeometry(9, 8, 48f, 4f, 6f)
+        Direction.entries.forEach { facing ->
+            val idle = BoardSprites.playerFrames.rectIn(g, 3f, 2f, facing, CharacterPose.IDLE)
+            CharacterPose.entries.forEach { pose ->
+                val rect = BoardSprites.playerFrames.rectIn(g, 3f, 2f, facing, pose)
+                assertEquals("$facing/$pose height", idle.height, rect.height, 0.0001f)
+                assertEquals("$facing/$pose top", idle.top, rect.top, 0.0001f)
+                assertEquals("$facing/$pose ground line", idle.bottom, rect.bottom, 0.0001f)
+                assertEquals("$facing/$pose center x", idle.centerX, rect.centerX, 0.0001f)
+            }
+        }
+    }
+
+    @Test
+    fun poseWidthsFollowTheMeasuredArtwork() {
+        val g = BoardGeometry(9, 8, 48f, 4f, 6f)
+        val scale = 0.42f * 48f / 378f // footprint * cell / master width
+        fun width(facing: Direction, pose: CharacterPose) =
+            BoardSprites.playerFrames.rectIn(g, 3f, 2f, facing, pose).width
+        // Only the DRAWN WIDTH follows the pose art, on the one shared scale:
+        // pinned from the measured soft bboxes of the approved deliveries
+        // (idle down 378, walk_down_b 324, walk_right_a 491, push_right 708).
+        // Stride frames may be wider or narrower than idle depending on the
+        // art; height, ground line and center never move (see the invariant
+        // test above).
+        assertEquals(378 * scale, width(Direction.DOWN, CharacterPose.IDLE), 0.0001f)
+        assertEquals(324 * scale, width(Direction.DOWN, CharacterPose.STRIDE_B), 0.0001f)
+        assertEquals(491 * scale, width(Direction.RIGHT, CharacterPose.STRIDE_A), 0.0001f)
+        assertEquals(708 * scale, width(Direction.RIGHT, CharacterPose.PUSH), 0.0001f)
+    }
+
+    @Test
+    fun characterFramesRejectPoseFramesThatWouldChangeTheScale() {
+        val mismatchedPose = mapOf(
+            Direction.DOWN to ApprovedSprites.walkDownA,
+            Direction.UP to ApprovedSprites.walkUpA,
+            Direction.LEFT to ApprovedSprites.walkLeftA,
+            Direction.RIGHT to SpriteSubject(262, 129, 491, 700)
+        )
+        val thrown = try {
+            CharacterFrames(
+                ApprovedSprites.player,
+                0.42f,
+                mapOf(
+                    Direction.DOWN to ApprovedSprites.player,
+                    Direction.UP to ApprovedSprites.playerUp,
+                    Direction.LEFT to ApprovedSprites.playerLeft,
+                    Direction.RIGHT to ApprovedSprites.playerRight
+                ),
+                walkA = mismatchedPose
+            )
+            null
+        } catch (e: IllegalArgumentException) {
+            e
+        }
+        assertTrue(thrown != null)
+    }
+
+    @Test
+    fun missingPoseSetsFallBackToTheIdleFrame() {
+        // Frames sets are optional (e.g. minimal test fixtures): a missing
+        // pose must reuse the idle frame, never crash or invent geometry.
+        val idleOnly = CharacterFrames(
+            ApprovedSprites.player,
+            0.42f,
+            mapOf(
+                Direction.DOWN to ApprovedSprites.player,
+                Direction.UP to ApprovedSprites.playerUp,
+                Direction.LEFT to ApprovedSprites.playerLeft,
+                Direction.RIGHT to ApprovedSprites.playerRight
+            )
+        )
+        Direction.entries.forEach { facing ->
+            assertEquals(
+                idleOnly.subjectFor(facing, CharacterPose.IDLE),
+                idleOnly.subjectFor(facing, CharacterPose.STRIDE_A)
+            )
+            assertEquals(
+                idleOnly.rectIn(geom(9, 8), 3f, 2f, facing, CharacterPose.IDLE),
+                idleOnly.rectIn(geom(9, 8), 3f, 2f, facing, CharacterPose.PUSH)
+            )
+        }
     }
 }
