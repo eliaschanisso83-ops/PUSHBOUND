@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width="1000" height="1000">
+  <path fill="#191817" d="M150 150H850V280H150Z"/>
+  <path fill="#191817" d="M150 720H850V850H150Z"/>
+  <path fill="#191817" d="M150 150H280V850H150Z"/>
+  <path fill="#191817" d="M720 150H850V315H720Z"/>
+  <path fill="#191817" d="M720 685H850V850H720Z"/>
+  <path fill="#191817" d="M790 315H850V685H790Z"/>
+  <path fill="#191817" d="M465 360H745V640H465Z"/>
+</svg>

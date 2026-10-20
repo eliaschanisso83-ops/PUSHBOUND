@@ -24,3 +24,6 @@ opencode.json
 # Local credentials / device SSH (never commit)
 .git-credentials
 .ssh/
+
+# Logo generator build output (Java)
+branding/*.class
