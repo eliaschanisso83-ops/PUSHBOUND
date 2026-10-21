@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Adaptive launcher icon (API 26+).
+
+    Foreground is the approved brand mark on its transparent ground; the kit
+    draws the mark at 70 % of the canvas specifically so it clears the
+    adaptive-icon safe zone (BRAND-GUIDE section 1). The background is the
+    kit's own Paper ground, sampled from app-icon-*.png as #F4EFE6, so the
+    masked adaptive icon and the unmasked API 24-25 fallback render the same
+    image.
+
+    The pre-26 fallbacks are the kit's solid app-icon PNGs copied verbatim at
+    mdpi/xhdpi/xxhdpi/xxxhdpi. hdpi is absent because the kit ships no 72 px
+    art and scaling it here would alter approved artwork; the platform scales
+    from the nearest bucket instead.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

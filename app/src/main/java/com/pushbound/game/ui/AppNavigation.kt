@@ -1,5 +1,6 @@
 package com.pushbound.game.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,7 +33,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -39,6 +43,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pushbound.game.Levels
+import com.pushbound.game.R
 import com.pushbound.game.data.SharedPreferencesProgressStore
 import com.pushbound.game.engine.DailyPuzzle
 import com.pushbound.game.engine.Medal
@@ -174,13 +179,21 @@ private fun MainMenuScreen(
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(
-            text = "PUSHBOUND",
-            color = MaterialTheme.colorScheme.onBackground,
-            fontSize = 34.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 6.sp,
-            maxLines = 1
+        // The approved horizontal lockup, not typed text. The Pushbound
+        // wordmark is drawn from geometric primitives rather than set in a
+        // font, so no system typeface can reproduce it — rendering the name
+        // as a string was always a different logo. ContentScale.FillWidth
+        // derives the height from the artwork's own ratio, so the mark is
+        // scaled and never distorted.
+        Image(
+            painter = painterResource(R.drawable.brand_logo_horizontal),
+            contentDescription = "Pushbound",
+            contentScale = ContentScale.FillWidth,
+            modifier = Modifier
+                // Capped so the lockup keeps its minimum legible size on a
+                // phone and does not balloon on a tablet or in landscape.
+                .widthIn(max = 280.dp)
+                .fillMaxWidth()
         )
         Text(
             text = "${progress.completedCount()} OF ${campaign.levelCount} CLEARED",

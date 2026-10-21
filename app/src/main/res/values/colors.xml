@@ -1,4 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="pushbound_window_background">#E7DECE</color>
+    <!--
+        Paper — the brand's primary light ground (BRAND-GUIDE section 3).
+
+        This was #E7DECE, which is not a documented palette colour. It is the
+        cold-start window background, so it is the first thing a player sees
+        and it also sets the status-bar tint; carrying an off-palette value
+        there is how the app drifted from the brand. Paper is the same ground
+        the approved app-icon ships on, so launcher, startup and menu now read
+        as one surface.
+    -->
+    <color name="pushbound_window_background">#F4EFE6</color>
+
+    <!--
+        Launcher icon ground, matching the solid app-icon-*.png the kit ships
+        as the API 24-25 fallback so both icon paths agree.
+    -->
+    <color name="ic_launcher_background">#F4EFE6</color>
 </resources>
