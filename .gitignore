@@ -25,6 +25,16 @@ opencode.json
 .git-credentials
 .ssh/
 
+# Release signing material — the production keystore lives outside the repo
+# and is reconstructed from a Actions secret into $RUNNER_TEMP only. None of
+# these may ever be committed, and the decoded copy must never be staged.
+*.keystore
+*.keystore.base64
+*.jks
+*.p12
+local-signing.properties
+*.pepk
+
 # Logo generator build output (Java)
 branding/*.class
 

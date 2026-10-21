@@ -11,9 +11,15 @@ jobs:
   build:
     # The job name is deliberately unchanged: it is the status-check context,
     # and renaming it would silently invalidate any branch protection that
-    # refers to it.
+    # refers to it. It now produces release artifacts as well as debug.
     name: Build debug APK
     runs-on: ubuntu-latest
+
+    # Release signing needs repository secrets. Fork PRs get an empty secret
+    # set by design, so they run the debug path only; push, dispatch and
+    # same-repo PRs run the signed release build below.
+    env:
+      RELEASE_BUILD: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
 
     steps:
       - name: Check out repository
@@ -45,6 +51,171 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug
 
+      # ------------------------------------------------------------------
+      # Release signing.
+      #
+      # All four values are SECRETS, never literals: they exist only in this
+      # job's environment, and only their NAMES are ever written to the log —
+      # GitHub masks secret values in output regardless.
+      # ------------------------------------------------------------------
+      - name: Verify release signing secrets are configured
+        if: env.RELEASE_BUILD == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=0
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            # Indirect expansion checks the value without ever printing it —
+            # only the secret NAME and its presence reach the log.
+            if [ -z "${!name}" ]; then
+              echo "::error::Required Actions secret is missing: $name"
+              missing=1
+            else
+              echo "$name: present"
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Release build aborted: all four signing secrets are required."
+            exit 1
+          fi
+
+      # The keystore is reconstructed in $RUNNER_TEMP — a runner-scoped path
+      # OUTSIDE the repository workspace — so there is no file in the checkout
+      # that could ever be staged, committed or uploaded.
+      - name: Reconstruct temporary production keystore
+        if: env.RELEASE_BUILD == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          KS="$RUNNER_TEMP/pushbound-release.keystore"
+          # The Base64 is piped on stdin rather than passed as an argument, so
+          # it never appears in the command line.
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KS"
+
+          if [ ! -s "$KS" ]; then
+            echo "::error::Decoded keystore is empty."
+            exit 1
+          fi
+
+          # Fails here — before the build — if the credentials do not match
+          # this keystore. Only the alias name and pass/fail reach the log.
+          if ! keytool -list -keystore "$KS" \
+                 -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+                 -alias "$ANDROID_KEY_ALIAS" > /dev/null 2>&1; then
+            echo "::error::The reconstructed keystore did not accept the supplied password/alias."
+            exit 1
+          fi
+
+          echo "Reconstructed the production keystore at a runner temp path ($(stat -c %s "$KS") bytes)."
+          echo "ANDROID_KEYSTORE_PATH=$KS" >> "$GITHUB_ENV"
+
+      - name: Build signed release APK and AAB
+        if: env.RELEASE_BUILD == 'true'
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease bundleRelease
+
+      # Proves the artifact was signed AND that it was signed by THIS
+      # keystore: the certificate digest embedded in the artifact is compared
+      # against the certificate held in the reconstructed keystore.
+      # A certificate is public material, so printing its digest is safe.
+      - name: Verify release APK and AAB signatures
+        if: env.RELEASE_BUILD == 'true'
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          KS="$RUNNER_TEMP/pushbound-release.keystore"
+          APK=$(ls app/build/outputs/apk/release/*.apk 2>/dev/null | head -n1 || true)
+          AAB=$(ls app/build/outputs/bundle/release/*.aab 2>/dev/null | head -n1 || true)
+
+          if [ -z "$APK" ]; then echo "::error::No release APK produced."; exit 1; fi
+          if [ -z "$AAB" ]; then echo "::error::No release AAB produced."; exit 1; fi
+          echo "APK: $APK"
+          echo "AAB: $AAB"
+
+          # Normalise a certificate digest to bare lowercase hex.
+          norm() { tr -d ':' | tr 'A-F' 'a-f' | tr -d '[:space:]'; }
+
+          # 1. The digest the keystore itself holds for this alias.
+          EXPECTED=$(keytool -list -v -keystore "$KS" \
+                        -storepass "$ANDROID_KEYSTORE_PASSWORD" \
+                        -alias "$ANDROID_KEY_ALIAS" \
+                      | sed -n 's/^ *(SHA256): *//p' | head -n1 | norm)
+          if [ -z "$EXPECTED" ]; then
+            echo "::error::Could not read the certificate from the keystore."
+            exit 1
+          fi
+          echo "Keystore certificate SHA-256: $EXPECTED"
+
+          # 2. The digest actually embedded in the APK, via apksigner when the
+          #    Android build-tools are on the runner, otherwise via the JDK.
+          APK_CERTS=""
+          APKSIGNER=$(find "${ANDROID_HOME:-/nonexistent}/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -n1 || true)
+          if [ -n "$APKSIGNER" ]; then
+            echo "Using apksigner: $APKSIGNER"
+            "$APKSIGNER" verify --print-certs "$APK" | tee /tmp/apk-certs.txt
+            APK_CERTS=$(sed -n 's/^Signer #1 certificate SHA-256 digest: *//p' /tmp/apk-certs.txt | norm)
+          else
+            echo "apksigner not found; using keytool"
+            keytool -printcert -jarfile "$APK" | tee /tmp/apk-certs.txt
+            APK_CERTS=$(sed -n 's/^ SHA256: *//p' /tmp/apk-certs.txt | head -n1 | norm)
+          fi
+
+          if [ -z "$APK_CERTS" ]; then
+            echo "::error::Could not read a certificate out of the release APK."
+            exit 1
+          fi
+
+          if [ "$APK_CERTS" != "$EXPECTED" ]; then
+            echo "::error::Release APK is not signed by the Pushbound production keystore."
+            exit 1
+          fi
+          echo "OK: APK signed by the production keystore."
+
+          # 3. The AAB is JAR-signed, so the JDK verifier reads it directly.
+          # jarsigner's exit code is unreliable for this (a mere warning flips
+          # it), so the verdict is taken from its own words instead.
+          if ! jarsigner -verify "$AAB" > /tmp/aab-verify.txt 2>&1; then
+            cat /tmp/aab-verify.txt
+            echo "::error::Release AAB failed signature verification."
+            exit 1
+          fi
+          if grep -q "jar is unsigned" /tmp/aab-verify.txt || ! grep -q "jar verified" /tmp/aab-verify.txt; then
+            cat /tmp/aab-verify.txt
+            echo "::error::Release AAB is not signed."
+            exit 1
+          fi
+          grep -E "jar verified|Signer" /tmp/aab-verify.txt || true
+
+          AAB_CERTS=$(keytool -printcert -jarfile "$AAB" 2>/dev/null | sed -n 's/^ SHA256: *//p' | head -n1 | norm || true)
+          if [ "$AAB_CERTS" != "$EXPECTED" ]; then
+            echo "::error::Release AAB is not signed by the Pushbound production keystore."
+            exit 1
+          fi
+          echo "OK: AAB signed by the production keystore."
+
+      # Runs even when an earlier step failed, so the signing material never
+      # outlives the job — not on success, not on failure, not on cancellation.
+      - name: Remove temporary keystore
+        if: always() && env.RELEASE_BUILD == 'true'
+        run: |
+          KS="$RUNNER_TEMP/pushbound-release.keystore"
+          if [ -f "$KS" ]; then
+            rm -f "$KS"
+            echo "Temporary keystore removed from the runner."
+          else
+            echo "No temporary keystore present."
+          fi
+
       - name: Upload lint report
         if: always()
         uses: actions/upload-artifact@v4
@@ -58,3 +229,19 @@ jobs:
         with:
           name: pushbound-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+
+      - name: Upload signed release APK
+        if: env.RELEASE_BUILD == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pushbound-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+
+      - name: Upload signed release AAB
+        if: env.RELEASE_BUILD == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pushbound-release-aab
+          path: app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
