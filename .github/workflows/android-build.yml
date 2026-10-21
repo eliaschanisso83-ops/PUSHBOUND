@@ -167,8 +167,15 @@ jobs:
           APKSIGNER=$(find "${ANDROID_HOME:-/nonexistent}/build-tools" -name apksigner -type f 2>/dev/null | sort -V | tail -n1 || true)
           if [ -n "$APKSIGNER" ]; then
             echo "Using apksigner: $APKSIGNER"
+            # pipefail is on: if the signature were invalid this would abort
+            # here rather than fall through to the digest comparison.
             "$APKSIGNER" verify --print-certs "$APK" | tee /tmp/apk-certs.txt
-            APK_CERTS=$(sed -n 's/^Signer #1 certificate SHA-256 digest: *//p' /tmp/apk-certs.txt | norm)
+            # apksigner prefixes each signer with its signature scheme —
+            # "Signer #1 ...", "V2 Signer: ...", "V3 Signer: ..." — so match
+            # the stable tail of the line instead of assuming a prefix.
+            APK_CERTS=$(grep -F "certificate SHA-256 digest:" /tmp/apk-certs.txt \
+                          | sed 's/.*certificate SHA-256 digest:[[:space:]]*//' \
+                          | head -n1 | norm)
           else
             echo "apksigner not found; using keytool"
             keytool -printcert -jarfile "$APK" | tee /tmp/apk-certs.txt
@@ -202,6 +209,11 @@ jobs:
           grep -E "jar verified|Signer" /tmp/aab-verify.txt || true
 
           AAB_CERTS=$(keytool -printcert -jarfile "$AAB" 2>/dev/null | fingerprint || true)
+          if [ -z "$AAB_CERTS" ]; then
+            echo "::error::Could not read a certificate out of the release AAB."
+            exit 1
+          fi
+          echo "AAB certificate SHA-256: $AAB_CERTS"
           if [ "$AAB_CERTS" != "$EXPECTED" ]; then
             echo "::error::Release AAB is not signed by the Pushbound production keystore."
             exit 1
