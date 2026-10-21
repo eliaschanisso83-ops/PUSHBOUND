@@ -145,11 +145,16 @@ jobs:
           # Normalise a certificate digest to bare lowercase hex.
           norm() { tr -d ':' | tr 'A-F' 'a-f' | tr -d '[:space:]'; }
 
+          # Extract a keytool fingerprint. keytool indents with a TAB, and in
+          # sed's basic regex parentheses are LITERAL — this must be written
+          # [[:space:]]* with no grouping, or it silently matches nothing and
+          # the digest comes back empty.
+          fingerprint() { sed -n 's/^[[:space:]]*SHA256:[[:space:]]*//p' | head -n1 | norm; }
+
           # 1. The digest the keystore itself holds for this alias.
           EXPECTED=$(keytool -list -v -keystore "$KS" \
                         -storepass "$ANDROID_KEYSTORE_PASSWORD" \
-                        -alias "$ANDROID_KEY_ALIAS" \
-                      | sed -n 's/^ *(SHA256): *//p' | head -n1 | norm)
+                        -alias "$ANDROID_KEY_ALIAS" 2>/dev/null | fingerprint)
           if [ -z "$EXPECTED" ]; then
             echo "::error::Could not read the certificate from the keystore."
             exit 1
@@ -167,7 +172,7 @@ jobs:
           else
             echo "apksigner not found; using keytool"
             keytool -printcert -jarfile "$APK" | tee /tmp/apk-certs.txt
-            APK_CERTS=$(sed -n 's/^ SHA256: *//p' /tmp/apk-certs.txt | head -n1 | norm)
+            APK_CERTS=$(fingerprint < /tmp/apk-certs.txt)
           fi
 
           if [ -z "$APK_CERTS" ]; then
@@ -196,7 +201,7 @@ jobs:
           fi
           grep -E "jar verified|Signer" /tmp/aab-verify.txt || true
 
-          AAB_CERTS=$(keytool -printcert -jarfile "$AAB" 2>/dev/null | sed -n 's/^ SHA256: *//p' | head -n1 | norm || true)
+          AAB_CERTS=$(keytool -printcert -jarfile "$AAB" 2>/dev/null | fingerprint || true)
           if [ "$AAB_CERTS" != "$EXPECTED" ]; then
             echo "::error::Release AAB is not signed by the Pushbound production keystore."
             exit 1
