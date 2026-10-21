@@ -11,7 +11,8 @@ jobs:
   build:
     # The job name is deliberately unchanged: it is the status-check context,
     # and renaming it would silently invalidate any branch protection that
-    # refers to it. It now produces release artifacts as well as debug.
+    # refers to it. Release runs publish exactly one APK and one AAB; the
+    # debug assemble below is a compile check only and is never uploaded.
     name: Build debug APK
     runs-on: ubuntu-latest
 
@@ -48,6 +49,9 @@ jobs:
       - name: Run Android lint
         run: ./gradlew lintDebug
 
+      # Compile check only — the resulting debug APK is NOT uploaded. Release
+      # runs publish one APK and one AAB; fork PRs have no signing secrets, so
+      # this is what still proves the app assembles on them.
       - name: Build debug APK
         run: ./gradlew assembleDebug
 
@@ -240,12 +244,6 @@ jobs:
           name: pushbound-lint-report
           path: app/build/reports/lint-results-*
           if-no-files-found: ignore
-
-      - name: Upload debug APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: pushbound-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
 
       - name: Upload signed release APK
         if: env.RELEASE_BUILD == 'true'
