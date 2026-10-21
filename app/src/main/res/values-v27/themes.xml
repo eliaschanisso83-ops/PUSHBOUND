@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        The same theme for API 27+, where the navigation bar can be tinted
+        light to match the light window background.
+
+        A qualified style REPLACES the base one outright rather than merging
+        with it, so every item is restated here — including the two that also
+        exist below.
+
+        This file is the fix for the one real lint ERROR this project had:
+        android:windowLightNavigationBar was set in the base theme while
+        minSdk is 24, so it would have been read on devices that have no such
+        attribute. Versioning the resource is the correct answer; suppressing
+        the check would have hidden a real incompatibility.
+    -->
+    <style name="Theme.Pushbound" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/pushbound_window_background</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>

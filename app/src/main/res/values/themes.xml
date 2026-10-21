@@ -1,8 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+        Base theme for every device.
+
+        android:windowLightStatusBar is API 23 and android:windowBackground is
+        older still, so both belong here. android:windowLightNavigationBar is
+        deliberately ABSENT: it needs API 27 while the app's minSdk is 24, and
+        putting it in values-v27 is what makes it available where the platform
+        actually supports it rather than annotating the problem away.
+    -->
     <style name="Theme.Pushbound" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/pushbound_window_background</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar">true</item>
     </style>
 </resources>
