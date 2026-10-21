@@ -144,26 +144,31 @@ class DPadLayout private constructor(
  * The complete bottom control formation (layout only, no appearance
  * changes). The movement block is a shallow single-row rectangle (UP on
  * top, LEFT / DOWN / RIGHT in one row) that stays dead-center on the bar
- * content — UP keeps its exact axis and vertical position — while Undo and
- * Restart become a vertical stack hugging the block's right side:
+ * content — UP keeps its exact axis and vertical position — while the
+ * secondary buttons flank it as two mirrored vertical stacks:
  *
- *              [ UP ]  [UNDO]
- *   [ LEFT ]  [ DOWN ]  [ RIGHT ]  [RESTART]
+ *  [REDO]              [ UP ]             [UNDO]
+ *  [HINT]  [ LEFT ]  [ DOWN ]  [ RIGHT ]  [RESTART]
  *
  *  - The movement block keeps the exact screen-centered axis it always had
  *    (dpadLeft puts centerX(UP) = content/2 for every width), so UP does
  *    not move at all;
- *  - the stack sits immediately outside RIGHT with the uniform gap (never
- *    at the screen edges, never touching the movement buttons), Undo above
- *    Restart, both to the right of the block — the "good corner" the
- *    player marked in red/orange;
- *  - the stack rises [STACK_RISE_FRACTION] × block-height above UP's top,
- *    the height at which BOTH of the player's orange target spots fall
- *    inside their buttons (undo covers the upper spot, restart covers the
- *    lower one) on the reference device;
+ *  - REDO sits level with UNDO so the pair reads as one control, and HINT
+ *    sits level with RESTART;
+ *  - the left stack mirrors the right one exactly: same size, same gap, same
+ *    vertical offsets, so nothing about the existing right stack changed;
  *  - the formation box keeps the movement block's bottom edge as its
  *    bottom edge, so the bar's growth happens upward only and UP's
  *    on-screen position is preserved exactly.
+ *
+ * WHY THE LEFT COLUMN CANNOT BE CLIPPED — [fittingDpadSize] already solves
+ * `containerWidth = dpad.width + 2·gap + 2·secondary`, i.e. it ALREADY
+ * reserved room for two secondary columns before either existed. That makes
+ * `dpadLeft ≥ secondary + gap` hold at every width, and the left stack is
+ * placed at `[dpadLeft − gap − secondary, dpadLeft − gap]`, which is flush
+ * with the content's left edge at the tightest size and moves inward as the
+ * screen widens. Both [undo] and [restart] are therefore untouched: this
+ * adds fields without displacing a single existing one.
  *
  * All coordinates are dp from the formation box's top-left corner.
  */
@@ -173,6 +178,8 @@ class ControlsLayout(
     val dpadTop: Float,
     val undo: PlacedRect,
     val restart: PlacedRect,
+    val redo: PlacedRect,
+    val hint: PlacedRect,
     val width: Float,
     val height: Float
 ) {
@@ -239,6 +246,11 @@ class ControlsLayout(
                 stackHeight - dpad.height
             )
 
+            // The left stack mirrors the right one across the cross, hugging
+            // the cross rather than the screen edge.
+            val leftStackRight = dpadLeft - gap
+            val leftStackLeft = leftStackRight - secondarySize
+
             // Coordinates are rebased so the box's top edge is the stack's
             // top (all offsets >= 0) and the box's bottom edge stays the
             // cross's bottom edge (UP's position preserved exactly).
@@ -252,6 +264,19 @@ class ControlsLayout(
                 dpadTop = dpadTop,
                 undo = PlacedRect(stackLeft, 0f, secondarySize, secondarySize),
                 restart = PlacedRect(stackLeft, secondarySize + gap, secondarySize, secondarySize),
+                // Clamped rather than allowed to go negative: [ControlsBar]
+                // already caps dpadSize at [fittingDpadSize] so this is never
+                // reached, but a caller that ignored the cap would get the
+                // buttons pressed against the edge instead of drawn off it.
+                redo = PlacedRect(
+                    leftStackLeft.coerceAtLeast(0f), 0f, secondarySize, secondarySize
+                ),
+                hint = PlacedRect(
+                    leftStackLeft.coerceAtLeast(0f),
+                    secondarySize + gap,
+                    secondarySize,
+                    secondarySize
+                ),
                 width = width,
                 height = height
             )

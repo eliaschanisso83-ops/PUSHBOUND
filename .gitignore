@@ -27,3 +27,6 @@ opencode.json
 
 # Logo generator build output (Java)
 branding/*.class
+
+# Device/toolchain files local to this machine — not project content
+environment/

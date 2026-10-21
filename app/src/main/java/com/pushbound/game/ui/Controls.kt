@@ -1,6 +1,8 @@
 package com.pushbound.game.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -12,20 +14,27 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.pushbound.game.R
 import com.pushbound.game.engine.Direction
 import kotlin.math.roundToInt
@@ -43,17 +52,21 @@ private const val SINK_FRACTION = 0.02f
 /**
  * Bottom control area (layout only):
  *
- *          [ UP ]  [ Undo ]
- *   [ LEFT ]  [ DOWN ]  [ RIGHT ]  [ Restart ]
+ *   [ Redo ]   [ UP ]   [ Undo ]
+ *   [ Hint ] [ LEFT ] [ DOWN ] [ RIGHT ] [ Restart ]
  *
  * The movement buttons form a shallow single-row rectangle — UP on top,
  * and LEFT / DOWN / RIGHT in one generously spaced horizontal row — centered
  * on the bar content, so UP keeps its exact screen axis and vertical
- * position. Undo is stacked above Restart immediately outside RIGHT (the
- * spots the player marked in red/orange on their annotated screenshot, see
- * ControlsLayout). Buttons are slices of the approved sheets at the app's
- * existing scale (same pixels, same dimensions, same behavior) — nothing
- * about their appearance or actions changes here.
+ * position. The secondary buttons flank the cross as two mirrored stacks:
+ * Undo above Restart on the right (the spots the player marked in
+ * red/orange), Redo above Hint on the left, level with their counterparts.
+ *
+ * REDO is the approved Undo artwork drawn mirrored, so it is unmistakably the
+ * opposite of Undo and costs no new asset. HINT is typographic — the app's
+ * own text style and palette — because art-direction forbids generating new
+ * UI artwork until assets/approved/style_reference_v1.png exists; it occupies
+ * the control area only and can never obstruct the board.
  *
  * Orientation only changes WHERE this bar is placed: the portrait column
  * gives it the full window width, landscape gives it a fixed-width panel on
@@ -99,15 +112,30 @@ fun ControlsBar(controller: GameController, modifier: Modifier = Modifier) {
                 resId = R.drawable.ui_button_undo,
                 label = "Undo",
                 enabled = controller.canUndo,
+                mirrored = false,
                 onClick = controller::undo,
                 modifier = Modifier.offset(formation.undo.left.dp, formation.undo.top.dp)
+            )
+            SecondaryButton(
+                resId = R.drawable.ui_button_undo,
+                label = "Redo",
+                enabled = controller.canRedo,
+                mirrored = true,
+                onClick = controller::redo,
+                modifier = Modifier.offset(formation.redo.left.dp, formation.redo.top.dp)
             )
             SecondaryButton(
                 resId = R.drawable.ui_button_restart,
                 label = "Restart",
                 enabled = true,
+                mirrored = false,
                 onClick = controller::restart,
                 modifier = Modifier.offset(formation.restart.left.dp, formation.restart.top.dp)
+            )
+            HintButton(
+                enabled = true,
+                onClick = controller::requestHint,
+                modifier = Modifier.offset(formation.hint.left.dp, formation.hint.top.dp)
             )
         }
     }
@@ -267,11 +295,20 @@ private fun DirectionButton(
     }
 }
 
+/**
+ * One artwork-backed secondary control.
+ *
+ * [mirrored] flips the drawn slice horizontally without moving the touch
+ * target, which is how Redo is rendered: the approved Undo artwork reversed,
+ * so the pair reads as "backwards" and "forwards" without inventing an asset
+ * that art-direction currently forbids generating.
+ */
 @Composable
 private fun SecondaryButton(
     resId: Int,
     label: String,
     enabled: Boolean,
+    mirrored: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -292,7 +329,16 @@ private fun SecondaryButton(
             )
             .semantics { contentDescription = label }
     ) {
-        Canvas(Modifier.fillMaxSize()) {
+        Canvas(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    // Mirroring happens here, not on the Box, so the click
+                    // bounds and the accessibility node stay exactly where the
+                    // button is drawn.
+                    scaleX = if (mirrored) -1f else 1f
+                }
+        ) {
             val sink = if (active) (size.height * SINK_FRACTION).roundToInt() else 0
             drawImage(
                 image = bitmap,
@@ -302,5 +348,65 @@ private fun SecondaryButton(
                 colorFilter = if (active) PressedDarken else null
             )
         }
+    }
+}
+
+/**
+ * The Hint control, typographic rather than illustrated.
+ *
+ * Art-direction forbids generating UI artwork until
+ * assets/approved/style_reference_v1.png exists, so this button is built from
+ * the app's own visual language instead: the same material colours, the same
+ * small uppercase letter-spaced text used by the HUD, and the same press
+ * treatment (sink plus a luminance drop) as the artwork buttons beside it. It
+ * lives entirely inside the control bar, so it can never cover the board.
+ */
+@Composable
+private fun HintButton(
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val active = pressed && enabled
+
+    Box(
+        modifier
+            .size(ControlsLayout.SECONDARY_BUTTON.dp)
+            .graphicsLayer {
+                alpha = if (enabled) 1f else 0.45f
+                // The same 2% sink the artwork buttons use when pressed.
+                translationY = if (active) size.height * SINK_FRACTION else 0f
+            }
+            .background(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = if (active) 0.82f else 1f),
+                shape = RoundedCornerShape(14.dp)
+            )
+            .border(
+                width = 1.5.dp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f),
+                shape = RoundedCornerShape(14.dp)
+            )
+            .clickable(
+                interactionSource = interactionSource,
+                indication = null,
+                enabled = enabled,
+                role = Role.Button,
+                onClick = onClick
+            )
+            .semantics { contentDescription = "Hint" },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = "HINT",
+            color = MaterialTheme.colorScheme.onBackground.copy(
+                alpha = if (active) 0.75f else 1f
+            ),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = 1.5.sp,
+            maxLines = 1
+        )
     }
 }

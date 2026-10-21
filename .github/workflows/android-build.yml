@@ -3,10 +3,15 @@ name: Android test build
 on:
   push:
     branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
   build:
+    # The job name is deliberately unchanged: it is the status-check context,
+    # and renaming it would silently invalidate any branch protection that
+    # refers to it.
     name: Build debug APK
     runs-on: ubuntu-latest
 
@@ -23,11 +28,30 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
 
+      # Tests and lint run BEFORE the APK build on purpose. Both are faster to
+      # report than a full build, and running them first means a broken test or
+      # a lint error is what the log shows — not a compile failure that hides
+      # everything underneath it.
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest
+
+      # lintDebug aborts on lint ERRORS, and nothing here suppresses or
+      # downgrades them. If the project has real lint errors, this step goes
+      # red and the report below is uploaded even on failure so the findings
+      # can be read without re-running the workflow.
+      - name: Run Android lint
+        run: ./gradlew lintDebug
+
       - name: Build debug APK
         run: ./gradlew assembleDebug
 
-      - name: Run unit tests
-        run: ./gradlew testDebugUnitTest
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pushbound-lint-report
+          path: app/build/reports/lint-results-*
+          if-no-files-found: ignore
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4

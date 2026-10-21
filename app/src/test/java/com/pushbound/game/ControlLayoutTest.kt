@@ -256,4 +256,81 @@ class ControlLayoutTest {
             assertTrue(c.restart.bottom <= c.height + 0.0001f)
         }
     }
+
+    // The formation's own gap depends on ITS dpadSize, not on the 220dp
+    // reference the class-level `gap` is measured at — so the scale is read
+    // back off the placed UP button rather than assumed.
+    private fun formationGap(of: ControlsLayout): Float =
+        ControlArtwork.GAP_FRACTION * ControlArtwork.NOMINAL_BUTTON *
+            of.dpad.up.width / ControlArtwork.up.width
+
+    @Test
+    fun theLeftColumnMirrorsTheRightOneWithoutDisturbingIt() {
+        val fgap = formationGap(formation)
+
+        // Redo is level with Undo and Hint level with Restart, so the two
+        // stacks read as one control pair rather than as a pile-up.
+        assertEquals(formation.undo.top, formation.redo.top, 0.0001f)
+        assertEquals(formation.undo.width, formation.redo.width, 0.0001f)
+        assertEquals(formation.restart.top, formation.hint.top, 0.0001f)
+        assertEquals(formation.restart.width, formation.hint.width, 0.0001f)
+
+        // The right stack sits exactly where it always did — immediately
+        // outside RIGHT with the uniform gap.
+        assertEquals(
+            formation.dpadLeft + formation.dpad.width + fgap,
+            formation.undo.left, 0.0001f
+        )
+        assertEquals(formation.undo.left, formation.restart.left, 0.0001f)
+        assertEquals(formation.undo.top + secondary + fgap, formation.restart.top, 0.0001f)
+
+        // And the left stack mirrors it across the cross.
+        assertEquals(formation.dpadLeft - fgap, formation.redo.right, 0.0001f)
+        assertEquals(formation.redo.left, formation.hint.left, 0.0001f)
+    }
+
+    @Test
+    fun theLeftColumnNeverOverlapsTheCrossOrLeavesTheBar() {
+        // Redo sits clear of the cross by exactly the same gap Undo uses.
+        assertTrue("redo must not touch the cross", formation.redo.right <= formation.dpadLeft)
+        assertTrue("hint must not touch the cross", formation.hint.right <= formation.dpadLeft)
+
+        // Nor may it be drawn outside the formation box.
+        assertTrue("redo stays inside the bar", formation.redo.left >= -0.0001f)
+        assertTrue("hint stays inside the bar", formation.hint.left >= -0.0001f)
+        assertTrue("hint stays inside the bar", formation.hint.bottom <= formation.height + 0.0001f)
+    }
+
+    @Test
+    fun theLeftColumnFitsAtEveryScreenWidth() {
+        for (screen in listOf(320f, 360f, 411f, 480f, 600f, 800f)) {
+            val w = screen - 32f
+            val c = ControlsLayout.compute(w, appDpadSize(w))
+            val fgap = formationGap(c)
+
+            assertTrue("${screen}dp: redo inside the bar", c.redo.left >= -0.0001f)
+            assertTrue("${screen}dp: hint inside the bar", c.hint.left >= -0.0001f)
+            assertEquals(
+                "${screen}dp: left gap mirrors the right gap",
+                c.dpadLeft - fgap, c.redo.right, 0.0001f
+            )
+            // The two columns can never meet: the cross separates them.
+            assertTrue(
+                "${screen}dp: the stacks cannot collide",
+                c.redo.right <= c.undo.left + 0.0001f
+            )
+        }
+    }
+
+    @Test
+    fun theTwoColumnsFillTheBarExactlyAtTheTightestFit() {
+        // fittingDpadSize already reserves room for two secondary columns, so
+        // at that size the left stack must sit flush with the content's left
+        // edge instead of being clipped off it.
+        val w = 360f
+        val c = ControlsLayout.compute(w, ControlsLayout.fittingDpadSize(w))
+        assertEquals("flush with the left edge at the tightest fit", 0f, c.redo.left, 0.05f)
+        assertTrue(c.redo.right <= c.dpadLeft + 0.0001f)
+        assertEquals(c.dpadTop + c.dpad.height, c.height, 0.0001f)
+    }
 }

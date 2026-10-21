@@ -10,14 +10,26 @@ object GameEngine {
         GameState(
             player = level.playerStart,
             boxes = level.boxStarts.toSet(),
-            moves = 0
+            moves = 0,
+            pushes = 0
         )
+
+    /**
+     * Solved when at least one goal exists and every box rests on a goal.
+     *
+     * Exposed separately from [isComplete] so tools that only hold the box set
+     * (the solver, the validator, the hint system) never have to manufacture a
+     * full [GameState] just to ask the question — and so there is exactly ONE
+     * definition of "solved" in the codebase.
+     */
+    fun areAllBoxesOnGoals(level: LevelDefinition, boxes: Set<Position>): Boolean =
+        level.goals.isNotEmpty() &&
+            boxes.size == level.goals.size &&
+            boxes.all { it in level.goals }
 
     /** Solved when at least one goal exists and every box rests on a goal. */
     fun isComplete(level: LevelDefinition, state: GameState): Boolean =
-        level.goals.isNotEmpty() &&
-            state.boxes.size == level.goals.size &&
-            state.boxes.all { it in level.goals }
+        areAllBoxesOnGoals(level, state.boxes)
 
     /**
      * Applies one grid move:
@@ -54,6 +66,7 @@ object GameEngine {
                 player = target,
                 boxes = state.boxes - target + beyond,
                 moves = state.moves + 1,
+                pushes = state.pushes + 1,
                 facing = direction
             ),
             pushedBox = target to beyond

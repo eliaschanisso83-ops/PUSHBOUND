@@ -43,6 +43,33 @@ class GameControllerTest {
     /** Waits out the 110ms animation window so the next input is accepted. */
     private fun pastAnimation() = runBlocking { delay(GameController.MOVE_ANIMATION_MS + 60L) }
 
+    /**
+     * Waits until a controller signal actually shows up, up to three seconds.
+     *
+     * THE PROBLEM THIS SOLVES: the controller starts a 110ms animation and
+     * QUEUES any input that arrives while one is running. A fixed sleep can
+     * expire before that animation has been scheduled through, so the press
+     * under test is queued instead of performed — and the signal it should have
+     * produced is simply absent when the assertion runs. On a quiet machine
+     * 170ms was always enough, which is exactly why the race was invisible: it
+     * only surfaced once the suite grew and the device was busy.
+     *
+     * Polling for the signal itself removes the race completely: a queued press
+     * still executes moments later, and a genuinely broken signal fails within
+     * a bounded time instead of hanging. Sleeping the JUnit thread is safe
+     * because the controller's work runs on [Dispatchers.Default].
+     */
+    private fun awaitSignal(what: String, poll: () -> Any?) {
+        val deadline = System.currentTimeMillis() + 3_000L
+        while (poll() == null) {
+            assertTrue(
+                "$what: never appeared within 3s",
+                System.currentTimeMillis() < deadline
+            )
+            Thread.sleep(5)
+        }
+    }
+
     @Test
     fun stepMoveExposesTheWalkKindAndMovesOneCell() {
         val controller = GameController(openRoom, scope)
@@ -90,8 +117,8 @@ class GameControllerTest {
         assertEquals(Direction.RIGHT, controller.state.facing)
         pastAnimation()
         controller.onDirectionPressed(Direction.UP) // blocked by the wall
+        awaitSignal("the blocked-effort pulse") { controller.lastBlocked }
         val blocked = controller.lastBlocked
-        assertNotNull(blocked)
         assertEquals(Direction.UP, blocked!!.direction)     // effort leans with the input
         assertEquals(Direction.RIGHT, controller.state.facing) // facing untouched
     }
@@ -113,7 +140,7 @@ class GameControllerTest {
         assertNotNull(controller.lastPush)
         pastAnimation()
         controller.onDirectionPressed(Direction.RIGHT) // blocked, then undo
-        assertNotNull(controller.lastBlocked)
+        awaitSignal("the blocked-effort pulse") { controller.lastBlocked }
         pastAnimation()
         controller.undo()
         assertEquals("undo must restart the timeline as a plain glide",
@@ -130,7 +157,7 @@ class GameControllerTest {
         controller.onDirectionPressed(Direction.RIGHT)
         pastAnimation()
         controller.onDirectionPressed(Direction.RIGHT) // blocked pulse pending
-        assertNotNull(controller.lastBlocked)
+        awaitSignal("the blocked-effort pulse") { controller.lastBlocked }
         val epochBefore = controller.resetEpoch
         controller.restart()
         assertNull(controller.currentMove)
@@ -147,6 +174,10 @@ class GameControllerTest {
         controller.onDirectionPressed(Direction.UP)
         controller.onDirectionPressed(Direction.DOWN) // queued: exactly one input
         pastAnimation()
+        // The queued press only lands once the running animation releases the
+        // input, so wait for the position it must reach rather than for a
+        // fixed slice of wall clock.
+        awaitSignal("the queued input") { controller.state.player.takeIf { it == Position(2, 2) } }
         assertEquals("the queued input must have executed", Position(2, 2), controller.state.player)
         assertEquals("the queued step restarts the timeline", 2, controller.currentMove!!.id)
         assertEquals(MoveAnimKind.STEP, controller.currentMove!!.kind)
@@ -159,6 +190,10 @@ class GameControllerTest {
         val first = controller.currentMove!!.id
         pastAnimation()
         controller.onDirectionPressed(Direction.DOWN)
+        // If the window had not closed yet this press would be queued and the
+        // old id would still be showing, so wait for the id that can only come
+        // from the second step having actually run.
+        awaitSignal("the second step") { controller.currentMove?.takeIf { it.id > first } }
         val second = controller.currentMove!!.id
         assertTrue("ids must increase", second > first)
     }
