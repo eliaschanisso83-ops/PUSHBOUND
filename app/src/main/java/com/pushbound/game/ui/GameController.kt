@@ -254,11 +254,18 @@ class GameController(
         if (saved.key != contentKey) return
         if (!saved.isRestorableOn(level)) return
 
-        session.restore(
-            current = saved.current.toState(),
-            undo = saved.undo.map { it.toState() },
-            redo = saved.redo.map { it.toState() }
-        )
+        if (saved.undo.isEmpty() && saved.redo.isEmpty()) {
+            // No history survived the save: restore the position only, and make
+            // the absence of an undo path visible rather than leaving a phantom
+            // stack behind.
+            session.restoreState(saved.current.toState())
+        } else {
+            session.restore(
+                current = saved.current.toState(),
+                undo = saved.undo.map { it.toState() },
+                redo = saved.redo.map { it.toState() }
+            )
+        }
         syncFromSession()
     }
 

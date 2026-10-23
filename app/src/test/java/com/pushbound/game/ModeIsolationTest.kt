@@ -496,6 +496,42 @@ class ModeIsolationTest {
         }
     }
 
+    /**
+     * A save with no history restores the POSITION and leaves nothing to undo
+     * to. That is a different act from a full restore, and the controller
+     * must not report a phantom undo path.
+     */
+    @Test
+    fun aSessionWithNoHistoryRestoresThePositionAndNothingToUndo() {
+        val progressStore = InMemoryProgressStore()
+        val sessions = InMemorySessionStore()
+        val levelId = Levels.campaign.allLevels.first().id
+        val key = campaignKey(levelId)
+        val solution = LevelSolver.solve(Levels.byId(levelId)!!)!!
+
+        val first = GameController(Levels.byId(levelId)!!, scope, progressStore, key, sessions)
+        play(first, solution.moves.take(solution.moves.size / 2))
+
+        val leftPlayer = first.state.player
+        val leftBoxes = first.state.boxes
+        val leftMoves = first.state.moves
+
+        // Rewrite the stored session as a position-only save, the way an older
+        // build (or a save past the history cap) would have left it.
+        val saved = sessions.load()!!
+        sessions.save(saved.copy(undo = emptyList(), redo = emptyList()))
+
+        val resumed = GameController(Levels.byId(levelId)!!, scope, progressStore, key, sessions)
+
+        assertEquals("same level", levelId, resumed.level.id)
+        assertEquals("same player position", leftPlayer, resumed.state.player)
+        assertEquals("same crate positions", leftBoxes, resumed.state.boxes)
+        assertEquals("same move count", leftMoves, resumed.state.moves)
+        assertFalse("nothing to undo", resumed.canUndo)
+        assertFalse("nothing to redo", resumed.canRedo)
+        assertFalse("and still not complete", resumed.isComplete)
+    }
+
     /** A session saved on one level must not be accepted by another. */
     @Test
     fun aSessionBuiltForAnotherBoardIsRejectedRatherThanRestored() {

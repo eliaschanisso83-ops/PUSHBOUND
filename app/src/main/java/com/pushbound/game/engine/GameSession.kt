@@ -106,4 +106,21 @@ class GameSession(private val level: LevelDefinition) {
         redoStack.addAll(redo)
         state = current
     }
+
+    /**
+     * Replaces only the current state, discarding all history — what a save
+     * written before undo/redo were persisted restores to.
+     *
+     * Deliberately a separate entry point rather than defaulting [restore]'s
+     * parameters to empty lists. Restoring a position with no way back is a
+     * meaningfully different act from restoring one WITH its history, and
+     * making the histories optional would let a caller drop them by accident.
+     * A caller that has history passes it; a caller that genuinely has none
+     * says so.
+     */
+    fun restoreState(current: GameState) {
+        undoStack.clear()
+        redoStack.clear()
+        state = current
+    }
 }
