@@ -56,6 +56,7 @@ MAIN_SOURCES=(
     app/src/main/java/com/pushbound/game/levels/*.kt
     app/src/main/java/com/pushbound/game/progress/Progress.kt
     app/src/main/java/com/pushbound/game/progress/ProgressStore.kt
+    app/src/main/java/com/pushbound/game/progress/SavedSession.kt
     app/src/main/java/com/pushbound/game/ads/*.kt
     app/src/main/java/com/pushbound/game/ui/BoardLayout.kt
     app/src/main/java/com/pushbound/game/ui/ControlLayout.kt

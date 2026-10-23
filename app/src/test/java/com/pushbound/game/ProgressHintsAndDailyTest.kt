@@ -1,5 +1,6 @@
 package com.pushbound.game
 
+import com.pushbound.game.engine.ContentKey
 import com.pushbound.game.engine.DailyPuzzle
 import com.pushbound.game.engine.Direction
 import com.pushbound.game.engine.GameEngine
@@ -235,7 +236,7 @@ class ProgressHintsAndDailyTest {
         // A messy run: more moves, fewer pushes.
         state = Progress.recordCompletion(state, id, moves = 40, pushes = 1, medal = Medal.BRONZE)
 
-        val record = state.records.getValue(id)
+        val record = state.recordFor(id)!!
         assertEquals("fewest moves are kept", 20, record.bestMoves)
         assertEquals("fewest pushes are kept", 1, record.bestPushes)
         assertEquals("the better medal is kept", Medal.SILVER, record.bestMedal)
@@ -250,7 +251,7 @@ class ProgressHintsAndDailyTest {
         state = Progress.recordCompletion(state, id, 10, 3, Medal.GOLD)
         state = Progress.recordCompletion(state, id, 90, 30, Medal.BRONZE)
 
-        assertEquals(Medal.GOLD, state.records.getValue(id).bestMedal)
+        assertEquals(Medal.GOLD, state.recordFor(id)!!.bestMedal)
     }
 
     @Test
@@ -260,7 +261,40 @@ class ProgressHintsAndDailyTest {
         state = Progress.recordCompletion(state, "w1-1", 50, 9, Medal.BRONZE)
 
         assertTrue(state.isCompleted("w1-1"))
-        assertEquals(1, state.completedCount())
+        // Two finishes of the same level merge into ONE record, and the counter
+        // the menu shows counts that record exactly once.
+        assertEquals(1, state.completedCampaignCount(Levels.campaign))
+    }
+
+    /**
+     * THE ISOLATION TEST FOR THE COUNTER: a daily puzzle completion is a real
+     * completion and must be invisible to the campaign counter. Before modes
+     * were namespaced this was impossible to express, because the daily wrote
+     * into the very record the campaign counted.
+     */
+    @Test
+    fun aDailyCompletionDoesNotRaiseTheCampaignCounter() {
+        var state = ProgressState()
+        val before = state.completedCampaignCount(Levels.campaign)
+
+        val day = DailyPuzzle.epochDay(2026, 10, 23)
+        state = Progress.recordCompletion(
+            state,
+            ContentKey.daily(day),
+            moves = 42,
+            pushes = 9,
+            medal = Medal.GOLD
+        )
+
+        assertTrue("today's puzzle is completed", state.isCompleted(ContentKey.daily(day)))
+        assertEquals(
+            "campaign counter must not move",
+            before,
+            state.completedCampaignCount(Levels.campaign)
+        )
+        // And the campaign level the day's board was drawn from stays untouched.
+        val boardId = ModeResolver.levelIdFor(GameMode.Daily(day), Levels.campaign)!!
+        assertFalse(state.isCompleted(ContentKey.campaign(boardId)))
     }
 
     @Test
@@ -285,8 +319,8 @@ class ProgressHintsAndDailyTest {
 
         assertEquals(state, decoded)
         assertEquals(state.records, decoded.records)
-        assertEquals(Medal.SILVER, decoded.records.getValue("w1-1").bestMedal)
-        assertEquals(9, decoded.records.getValue("w2-1").bestMoves)
+        assertEquals(Medal.SILVER, decoded.recordFor("w1-1")!!.bestMedal)
+        assertEquals(9, decoded.recordFor("w2-1")!!.bestMoves)
         assertFalse(decoded.isCompleted("w2-1"))
     }
 
@@ -317,13 +351,13 @@ class ProgressHintsAndDailyTest {
         // and are dropped; the rest are kept, some with individual fields
         // degraded rather than discarded wholesale.
         assertEquals(4, decoded.records.size)
-        assertEquals(Medal.GOLD, decoded.records.getValue("w1-1").bestMedal)
+        assertEquals(Medal.GOLD, decoded.recordFor("w1-1")!!.bestMedal)
         // The unknown medal degrades to "no medal", keeping the rest of the record.
-        assertEquals(Medal.BRONZE, decoded.records.getValue("w2-1").bestMedal)
-        assertNull(decoded.records.getValue("w1-2").bestMedal)
-        assertEquals(10, decoded.records.getValue("w1-2").bestMoves)
-        assertNull("a negative count is not trusted", decoded.records.getValue("w1-3").bestMoves)
-        assertEquals(2, decoded.records.getValue("w1-3").bestPushes)
+        assertEquals(Medal.BRONZE, decoded.recordFor("w2-1")!!.bestMedal)
+        assertNull(decoded.recordFor("w1-2")!!.bestMedal)
+        assertEquals(10, decoded.recordFor("w1-2")!!.bestMoves)
+        assertNull("a negative count is not trusted", decoded.recordFor("w1-3")!!.bestMoves)
+        assertEquals(2, decoded.recordFor("w1-3")!!.bestPushes)
     }
 
     @Test
@@ -334,7 +368,7 @@ class ProgressHintsAndDailyTest {
         store.save(state)
 
         assertEquals(state, store.load())
-        assertEquals(Medal.GOLD, store.load().records.getValue("w1-1").bestMedal)
+        assertEquals(Medal.GOLD, store.load().recordFor("w1-1")!!.bestMedal)
     }
 
     // ------------------------------------------------------------------ hints --

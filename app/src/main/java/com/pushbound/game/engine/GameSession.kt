@@ -72,4 +72,38 @@ class GameSession(private val level: LevelDefinition) {
         redoStack.clear()
         state = GameEngine.initialState(level)
     }
+
+    /**
+     * Every state the player can step back to, most recent LAST.
+     *
+     * Exposed read-only so a save can serialise the real stacks without being
+     * able to mutate them. Returned as a plain list because the caller only ever
+     * reads it.
+     */
+    fun undoSnapshots(): List<GameState> = undoStack.toList()
+
+    /** Every state the player can step forward to, most recent LAST. */
+    fun redoSnapshots(): List<GameState> = redoStack.toList()
+
+    /**
+     * Replaces the whole session — current state plus both history stacks —
+     * with ones taken from a save.
+     *
+     * Validation is the CALLER's job, not this method's: the restore path checks
+     * the save against the level first (see
+     * [com.pushbound.game.progress.SavedSession.isRestorableOn]) and declines
+     * the whole session when it does not match, rather than leaving the player
+     * half-restored on a board that no longer exists.
+     */
+    fun restore(
+        current: GameState,
+        undo: List<GameState>,
+        redo: List<GameState>
+    ) {
+        undoStack.clear()
+        redoStack.clear()
+        undoStack.addAll(undo)
+        redoStack.addAll(redo)
+        state = current
+    }
 }

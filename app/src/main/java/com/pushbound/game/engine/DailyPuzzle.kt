@@ -103,6 +103,50 @@ object DailyPuzzle {
     }
 
     /**
+     * The daily CONTENT identity for [epochDay]: its ISO-8601 date.
+     *
+     * This is deliberately NOT a campaign level id. The board a day plays is
+     * still picked by [levelIdFor], but the day's identity — the thing progress
+     * and the resumable session are keyed by — is the date itself. That is what
+     * lets two modes share a grid without ever sharing a record.
+     */
+    fun contentIdFor(epochDay: Long): String = isoDate(epochDay)
+
+    /**
+     * Inverse of [isoDate]: the epoch day of a `yyyy-MM-dd` string.
+     *
+     * Days-from-civil, the exact inverse of the arithmetic in [isoDate], so a
+     * round trip through encode and decode is lossless for every representable
+     * date. Written by hand for the same reason [isoDate] is: the app's minSdk
+     * is 24 and `java.time.LocalDate` needs 26.
+     *
+     * @return null when [text] is not a well-formed ISO-8601 calendar date.
+     *   Malformed input is rejected rather than coerced, because this value
+     *   becomes a persisted identity and guessing it would silently merge two
+     *   different days.
+     */
+    fun parseIsoDate(text: String): Long? {
+        val parts = text.split('-')
+        // ISO years outside 0000..9999 carry a sign and are four or more digits,
+        // so a well-formed date has exactly three '-'-separated fields only when
+        // the year is unsigned; a signed year still yields three fields because
+        // the sign belongs to the first one.
+        if (parts.size != 3) return null
+
+        val year = parts[0].toIntOrNull() ?: return null
+        val month = parts[1].toIntOrNull() ?: return null
+        val day = parts[2].toIntOrNull() ?: return null
+        if (month !in 1..12 || day !in 1..31) return null
+        // Reject text that only LOOKS like a date, e.g. "20261-01-01" parsed as
+        // year 20261, or "2026-001-01": the encoder never emits those shapes.
+        if (parts[1].length != 2 || parts[2].length != 2) return null
+        val minYear = if (parts[0].startsWith("-")) -9999 else 0
+        if (year < minYear || year > 9999) return null
+
+        return epochDay(year, month, day)
+    }
+
+    /**
      * [epochDay] as an ISO-8601 calendar date, `yyyy-MM-dd`.
      *
      * This is the identity a player reads on the daily-puzzle entry, so it has

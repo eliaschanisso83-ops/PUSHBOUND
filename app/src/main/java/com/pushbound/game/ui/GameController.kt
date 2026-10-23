@@ -12,6 +12,7 @@ import com.pushbound.game.ads.HintGate
 import com.pushbound.game.ads.InterstitialPolicy
 import com.pushbound.game.ads.InterstitialState
 import com.pushbound.game.ads.NoOpAdsGateway
+import com.pushbound.game.engine.ContentKey
 import com.pushbound.game.engine.Direction
 import com.pushbound.game.engine.GameSession
 import com.pushbound.game.engine.Hints
@@ -20,9 +21,13 @@ import com.pushbound.game.engine.Medal
 import com.pushbound.game.engine.MoveResult
 import com.pushbound.game.engine.Position
 import com.pushbound.game.progress.InMemoryProgressStore
+import com.pushbound.game.progress.InMemorySessionStore
 import com.pushbound.game.progress.Progress
 import com.pushbound.game.progress.ProgressState
 import com.pushbound.game.progress.ProgressStore
+import com.pushbound.game.progress.SavedSession
+import com.pushbound.game.progress.SessionSnapshot
+import com.pushbound.game.progress.SessionStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -51,13 +56,24 @@ data class BlockedAnim(val direction: Direction, val id: Long)
  * The immutable result of the run that finished. Captured at the moment of
  * completion and never recomputed, so the overlay always shows the numbers the
  * player actually achieved even after they undo out of the solved state.
+ *
+ * [key] is the run's [ContentKey], not merely its level id, because WHICH
+ * RECORD this result belongs to depends on the mode. Finishing `daily/2026-10-23`
+ * and finishing `campaign/w3-2` can show identical numbers on an identical
+ * grid and must still write two different records.
  */
 data class CompletedRun(
-    val levelId: String,
+    val key: ContentKey,
     val moves: Int,
     val pushes: Int,
     val medal: Medal
-)
+) {
+    /** The content id inside the key — `w3-2` or `2026-10-23`. */
+    val contentId: String get() = key.id
+
+    /** True when this run belongs to the shared daily puzzle. */
+    val isDaily: Boolean get() = key.isDaily
+}
 
 /**
  * Thin Compose glue around the pure [GameSession]: exposes observable state for
@@ -74,6 +90,20 @@ class GameController(
     level: LevelDefinition,
     private val scope: CoroutineScope,
     private val progressStore: ProgressStore = InMemoryProgressStore(),
+    /**
+     * WHICH MODE this run belongs to, and which record it writes.
+     *
+     * Defaults to campaign so a caller that only ever plays campaign levels
+     * needs no extra argument, but the default is a fact about that caller and
+     * not a safe universal: a daily run MUST be constructed with
+     * [ContentKey.daily], or its completion lands in the campaign's records —
+     * which is exactly the defect this parameter exists to close.
+     *
+     * Declared AFTER the three long-standing parameters so existing positional
+     * call sites keep meaning exactly what they always meant.
+     */
+    startKey: ContentKey = ContentKey.campaign(level.id),
+    private val sessionStore: SessionStore = InMemorySessionStore(),
     private val ads: AdsGateway = NoOpAdsGateway,
     /**
      * The campaign used for STRUCTURE — ids, order, unlocking. The authored
@@ -96,6 +126,19 @@ class GameController(
      * exactly that single level.
      */
     var level: LevelDefinition by mutableStateOf(level)
+        private set
+
+    /**
+     * The mode and content id this controller is currently playing.
+     *
+     * Mutable because [loadLevel] can move the controller onto a different
+     * piece of content — and when it does, the record being written has to move
+     * with it. Keeping it in one observable place means the completion path has
+     * exactly one source for "which key do I record under", instead of each
+     * caller re-deriving it from the level id (which is how a daily run could
+     * once end up recorded as a campaign level).
+     */
+    var contentKey by mutableStateOf(startKey)
         private set
 
     private var session = GameSession(level)
@@ -127,10 +170,25 @@ class GameController(
     var lastResult by mutableStateOf<CompletedRun?>(null)
         private set
 
-    /** True once the level after this one has been opened up by this run. */
-    val nextLevelId: String? get() = Levels.nextAfter(level.id)?.id
+    /**
+     * The campaign level that follows this one, or null when this run is not
+     * part of the campaign.
+     *
+     * GATED ON THE MODE, not on the board: a daily puzzle whose grid happens to
+     * be `w3-2` must not offer "Continue" into `w3-3`, because finishing that
+     * daily unlocks nothing in the campaign. In daily mode the completion
+     * overlay offers "Play Again" instead.
+     */
+    val nextLevelId: String?
+        get() = if (contentKey.isDaily) null else Levels.nextAfter(level.id)?.id
 
-    val bestMedalOnThisLevel: Medal? get() = progress.recordFor(level.id)?.bestMedal
+    /**
+     * The best medal this player holds for THIS run's content.
+     *
+     * Read through [contentKey] so a daily puzzle shows its own history rather
+     * than the medal earned on the campaign level it shares a grid with.
+     */
+    val bestMedalOnThisLevel: Medal? get() = progress.recordFor(contentKey)?.bestMedal
 
     // --- hints -------------------------------------------------------------
 
@@ -171,7 +229,62 @@ class GameController(
     private var blockedId = 0L
 
     init {
+        restoreSessionIfAny()
         refreshHintAccess()
+    }
+
+    /**
+     * Puts the player back where they were, if the store still holds a session
+     * for THIS content.
+     *
+     * Two conditions have to hold, and both are checked rather than assumed:
+     *
+     *  - the saved session must belong to this exact [contentKey]. A session for
+     *    `daily/2026-10-23` is not a session for `campaign/w3-2` even when the
+     *    two share a grid, so opening one never resurrects the other;
+     *  - the save must still describe this level's board. Levels get redesigned,
+     *    and a save that no longer matches is dropped instead of putting an
+     *    impossible board on screen.
+     *
+     * When either fails the player simply starts the level fresh, which is the
+     * only sane answer to a stale save.
+     */
+    private fun restoreSessionIfAny() {
+        val saved = sessionStore.load() ?: return
+        if (saved.key != contentKey) return
+        if (!saved.isRestorableOn(level)) return
+
+        session.restore(
+            current = saved.current.toState(),
+            undo = saved.undo.map { it.toState() },
+            redo = saved.redo.map { it.toState() }
+        )
+        syncFromSession()
+    }
+
+    /**
+     * Writes the run's current position to the session store, or clears it once
+     * the level is finished.
+     *
+     * Clearing on completion is what stops RESUME from reopening a solved board:
+     * the moment the run is done, there is no longer anything to resume. The
+     * same store is used for both modes, so leaving a daily mid-way and then
+     * opening it again restores that daily — and only that daily.
+     */
+    private fun persistSession() {
+        if (session.isComplete) {
+            sessionStore.save(null)
+            return
+        }
+        sessionStore.save(
+            SavedSession(
+                key = contentKey,
+                current = SessionSnapshot.from(session.state),
+                undo = session.undoSnapshots().map { SessionSnapshot.from(it) },
+                redo = session.redoSnapshots().map { SessionSnapshot.from(it) },
+                savedAtEpochMillis = System.currentTimeMillis()
+            )
+        )
     }
 
     /**
@@ -286,13 +399,20 @@ class GameController(
      * carrying them across would silently apply one puzzle's history to
      * another — hence a full reset here.
      */
-    fun loadLevel(newLevel: LevelDefinition) {
-        if (newLevel.id == level.id && !isComplete) return
+    fun loadLevel(
+        newLevel: LevelDefinition,
+        newKey: ContentKey = ContentKey.campaign(newLevel.id)
+    ) {
+        if (newLevel.id == level.id && newKey == contentKey && !isComplete) return
 
         animationJob?.cancel()
         animationJob = null
         queuedDirection = null
 
+        // The key moves WITH the level. Leaving it behind is how a daily run
+        // would get recorded as a campaign level, so the two are swapped
+        // together and the session is re-anchored under the new identity.
+        contentKey = newKey
         level = newLevel
         session = GameSession(newLevel)
 
@@ -311,11 +431,17 @@ class GameController(
     /**
      * Advances to the next level in the campaign, if this one has a successor.
      *
+     * CAMPAIGN ONLY. A daily puzzle has no successor: it is one board for one
+     * date, and offering to continue out of it would drop the player into the
+     * campaign while still holding the daily's session — the exact cross-mode
+     * leak this architecture exists to prevent.
+     *
      * @return true when a new level was opened.
      */
     fun continueToNextLevel(): Boolean {
+        if (contentKey.isDaily) return false
         val next = Levels.nextAfter(level.id) ?: return false
-        loadLevel(next)
+        loadLevel(next, ContentKey.campaign(next.id))
         return true
     }
 
@@ -430,6 +556,9 @@ class GameController(
         canUndo = session.canUndo
         canRedo = session.canRedo
         resolveCompletion()
+        // Written after completion has been resolved, so a run that just
+        // finished clears the session rather than immediately re-saving it.
+        persistSession()
         refreshHintAccess()
     }
 
@@ -439,6 +568,11 @@ class GameController(
      * Leaving the solved state clears [lastResult] so re-finishing after an
      * undo re-derives the same medal from the same counters; progress itself is
      * never rolled back, because the achievement was genuinely earned.
+     *
+     * THE RECORD IS WRITTEN UNDER [contentKey], never under the level id. That
+     * is the whole isolation: finishing `daily/2026-10-23` writes that key and
+     * nothing else, so the campaign's completion counter does not move, no
+     * campaign level is marked cleared, and no campaign level unlocks.
      */
     private fun resolveCompletion() {
         if (!session.isComplete) {
@@ -448,7 +582,7 @@ class GameController(
         if (lastResult != null) return
 
         val run = CompletedRun(
-            levelId = level.id,
+            key = contentKey,
             moves = state.moves,
             pushes = state.pushes,
             medal = Levels.medalFor(level, state.moves, state.pushes)
@@ -457,7 +591,7 @@ class GameController(
 
         progress = Progress.recordCompletion(
             state = progress,
-            levelId = run.levelId,
+            key = run.key,
             moves = run.moves,
             pushes = run.pushes,
             medal = run.medal

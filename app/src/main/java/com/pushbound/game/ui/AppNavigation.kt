@@ -45,21 +45,30 @@ import androidx.compose.ui.unit.sp
 import com.pushbound.game.Levels
 import com.pushbound.game.R
 import com.pushbound.game.data.SharedPreferencesProgressStore
+import com.pushbound.game.data.SharedPreferencesSessionStore
+import com.pushbound.game.engine.ContentKey
 import com.pushbound.game.engine.DailyPuzzle
 import com.pushbound.game.engine.Medal
+import com.pushbound.game.engine.ModeResolver
 import com.pushbound.game.levels.Campaign
 import com.pushbound.game.levels.World
 import com.pushbound.game.progress.Progress
 import com.pushbound.game.progress.ProgressState
+import com.pushbound.game.progress.SavedSession
 
 /**
  * Where the player currently is.
  *
- * Navigation is pure data: a screen is a value that names a level id or a
+ * Navigation is pure data: a screen is a value that names a [ContentKey] or a
  * world index, never a callback chain. That is what keeps it driven by the
  * level system rather than by a hard-coded route — adding a world or a level
  * changes no code here, and the list a player taps through is exactly
  * [Levels.campaign].
+ *
+ * PLAY CARRIES A [ContentKey], NOT A LEVEL ID. A level id says which grid to
+ * draw but not which mode it is being played in, and the mode decides which
+ * record a completion writes and which session it saves. Passing only the id is
+ * how a daily puzzle once became indistinguishable from a campaign level.
  */
 sealed interface Destination {
     /** Title screen: resume, campaign, daily puzzle. */
@@ -71,8 +80,8 @@ sealed interface Destination {
     /** Level select inside one world. */
     data class World(val index: Int) : Destination
 
-    /** Playing a specific level, by its stable id. */
-    data class Play(val levelId: String) : Destination
+    /** Playing one piece of content, by its mode-qualified identity. */
+    data class Play(val key: ContentKey) : Destination
 }
 
 /**
@@ -85,6 +94,15 @@ sealed interface Destination {
  * level unlocked" work across restarts and across the back-navigation, rather
  * than only inside one screen's lifetime.
  *
+ * THE THREE ENTRIES ARE NOT THREE DOORS ONTO THE SAME ROOM:
+ *
+ *  - CAMPAIGN opens the world list — the campaign's own navigation.
+ *  - DAILY PUZZLE opens today's puzzle under its own `daily/<date>` identity.
+ *  - RESUME re-enters the session the player was last in, whatever mode it
+ *    belonged to, with the board exactly as they left it. It owns no content of
+ *    its own, and when there is nothing to resume it is DISABLED rather than
+ *    quietly opening a campaign level.
+ *
  * Nothing here resolves or approves a level — approving a level runs the
  * solver. Navigation reads the AUTHORED campaign, which is structure only, and
  * the one level actually played is approved by [GameScreen] when it opens.
@@ -93,39 +111,52 @@ sealed interface Destination {
 fun PushboundApp() {
     val context = LocalContext.current
     val progressStore = remember(context) { SharedPreferencesProgressStore(context) }
+    val sessionStore = remember(context) { SharedPreferencesSessionStore(context) }
     val campaign = Levels.campaign
 
     var destination by remember { mutableStateOf<Destination>(Destination.MainMenu) }
     var progress by remember { mutableStateOf(progressStore.load()) }
+    // Re-read whenever the menu is shown: leaving a level writes a session, and
+    // finishing one clears it, so RESUME's availability is live state rather
+    // than something decided once at startup.
+    var savedSession by remember { mutableStateOf(sessionStore.load()) }
 
     // Coming back out of a level must show what that level changed: the medal
-    // it just earned and the level it just unlocked.
+    // it just earned, the level it just unlocked, and whether anything is now
+    // resumable.
     val reloadProgress: () -> Unit = {
         progress = progressStore.load()
+        savedSession = sessionStore.load()
     }
 
     when (val current = destination) {
         Destination.MainMenu -> MainMenuScreen(
             campaign = campaign,
             progress = progress,
+            savedSession = savedSession,
             onResume = {
-                val resumeId = Progress.nextLevelId(campaign, progress)
-                    ?: campaign.allLevels.firstOrNull()?.id
-                if (resumeId != null) destination = Destination.Play(resumeId)
+                // Resume restores the mode it was saved under. A daily session
+                // comes back as a daily session and a campaign one as campaign;
+                // neither is re-pointed at anything else. With no session the
+                // entry is disabled, so this branch is defence in depth.
+                val session = savedSession
+                if (session != null && ModeResolver.levelFor(session.key, campaign) != null) {
+                    destination = Destination.Play(session.key)
+                }
             },
             onCampaign = { destination = Destination.Campaign },
             onDailyPuzzle = {
-                DailyPuzzle.levelIdFor(
-                    DailyPuzzle.todayEpochDay(),
-                    campaign.allLevels.map { it.id }
-                )?.let { destination = Destination.Play(it) }
+                destination = Destination.Play(ContentKey.daily(DailyPuzzle.todayEpochDay()))
             }
         )
 
         Destination.Campaign -> WorldListScreen(
             campaign = campaign,
             progress = progress,
-            onBack = { destination = Destination.MainMenu },
+            onBack = {
+                reloadProgress()
+                destination = Destination.MainMenu
+            },
             onWorld = { index -> destination = Destination.World(index) }
         )
 
@@ -134,14 +165,24 @@ fun PushboundApp() {
             worldIndex = current.index,
             progress = progress,
             onBack = { destination = Destination.Campaign },
-            onLevel = { levelId -> destination = Destination.Play(levelId) }
+            onLevel = { levelId ->
+                destination = Destination.Play(ContentKey.campaign(levelId))
+            }
         )
 
         is Destination.Play -> GameScreen(
-            startLevelId = current.levelId,
+            startKey = current.key,
+            sessionStore = sessionStore,
             onExit = {
                 reloadProgress()
-                val worldIndex = campaign.level(current.levelId)?.world
+                // Back out to where this MODE lives: a campaign level returns to
+                // its own world, and a daily returns to the menu, because the
+                // daily has no list of its own to return to.
+                val worldIndex = if (current.key.isDaily) {
+                    null
+                } else {
+                    campaign.level(current.key.id)?.world
+                }
                 destination = if (worldIndex == null) {
                     Destination.MainMenu
                 } else {
@@ -153,23 +194,41 @@ fun PushboundApp() {
 }
 
 /**
- * Title screen. Resume and campaign are the two paths into the campaign; the
- * daily puzzle is a third, deliberately separated because it ignores progress
- * by design.
+ * Title screen. The three entries have three DIFFERENT jobs and are wired to
+ * three different sources:
+ *
+ *  - RESUME re-enters [savedSession], whatever mode it belongs to. It is drawn
+ *    DISABLED when there is nothing to resume, because pretending a game is in
+ *    progress when none is would send the player somewhere they did not ask for.
+ *  - CAMPAIGN opens the campaign's own world list.
+ *  - DAILY PUZZLE opens today's puzzle under `daily/<date>`, and is labelled
+ *    with the date so it reads as a daily rather than as a campaign level.
  */
 @Composable
 private fun MainMenuScreen(
     campaign: Campaign,
     progress: ProgressState,
+    savedSession: SavedSession?,
     onResume: () -> Unit,
     onCampaign: () -> Unit,
     onDailyPuzzle: () -> Unit
 ) {
     val today = DailyPuzzle.todayEpochDay()
-    val dailyId = DailyPuzzle.levelIdFor(today, campaign.allLevels.map { it.id })
     // Shown as a plain date so a player can tell which day's puzzle they are
     // looking at — the requirement is that the puzzle carries an identity.
-    val dailyIdentity = DailyPuzzle.isoDate(today)
+    val dailyIdentity = DailyPuzzle.contentIdFor(today)
+
+    // RESUME offers exactly one thing: the session that was saved last. Its
+    // subtitle names the MODE, so a player can see whether they are going back
+    // to a campaign level or to today's puzzle before they tap.
+    val resumable = savedSession != null &&
+        ModeResolver.levelFor(savedSession.key, campaign) != null
+    val resumeSubtitle = when {
+        savedSession == null -> "NOTHING IN PROGRESS"
+        !resumable -> "NOTHING IN PROGRESS"
+        savedSession.key.isDaily -> "TODAY'S PUZZLE · ${savedSession.key.id}"
+        else -> "CAMPAIGN · ${savedSession.key.id.uppercase()}"
+    }
 
     Column(
         Modifier
@@ -195,8 +254,11 @@ private fun MainMenuScreen(
                 .widthIn(max = 280.dp)
                 .fillMaxWidth()
         )
+        // CAMPAIGN progress only. Daily puzzles write their own records under
+        // `daily/<date>` and are invisible here by construction, so clearing
+        // six dailies still reads "0 OF 15 CLEARED".
         Text(
-            text = "${progress.completedCount()} OF ${campaign.levelCount} CLEARED",
+            text = "${progress.completedCampaignCount(campaign)} OF ${campaign.levelCount} CLEARED",
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
             fontSize = 12.sp,
             letterSpacing = 2.5.sp,
@@ -205,20 +267,20 @@ private fun MainMenuScreen(
 
         Spacer(Modifier.height(38.dp))
 
-        MenuEntry("RESUME", "CONTINUE THE CAMPAIGN", onResume)
+        MenuEntry(
+            title = "RESUME",
+            subtitle = resumeSubtitle,
+            enabled = resumable,
+            onClick = onResume
+        )
         Spacer(Modifier.height(16.dp))
         MenuEntry("CAMPAIGN", "CHOOSE A WORLD", onCampaign)
         Spacer(Modifier.height(16.dp))
-        // Only offered when the day actually resolves to a level, so the entry
-        // can never dead-end. It is offline by construction: the date comes
-        // from the device clock and the level from the local campaign.
-        if (dailyId != null) {
-            MenuEntry(
-                title = "DAILY PUZZLE",
-                subtitle = "TODAY · $dailyIdentity",
-                onClick = onDailyPuzzle
-            )
-        }
+        MenuEntry(
+            title = "DAILY PUZZLE",
+            subtitle = "TODAY · $dailyIdentity",
+            onClick = onDailyPuzzle
+        )
     }
 }
 
@@ -327,15 +389,29 @@ private fun LevelListScreen(
 
 // ------------------------------------------------------------------ pieces --
 
+/**
+ * One main-menu row.
+ *
+ * [enabled] exists for RESUME, which must be visibly inert when the player has
+ * nothing in progress. An entry that is drawn but does nothing reads as a bug;
+ * an entry that is drawn greyed out reads as "not yet", which is the truth.
+ */
 @Composable
-private fun MenuEntry(title: String, subtitle: String, onClick: () -> Unit) {
+private fun MenuEntry(
+    title: String,
+    subtitle: String,
+    enabled: Boolean = true,
+    onClick: () -> Unit
+) {
     val interaction = remember { MutableInteractionSource() }
+    val contentAlpha = if (enabled) 1f else 0.35f
     Column(
         Modifier
             .fillMaxWidth()
             .clickable(
                 interactionSource = interaction,
                 indication = null,
+                enabled = enabled,
                 role = Role.Button,
                 onClick = onClick
             )
@@ -344,12 +420,14 @@ private fun MenuEntry(title: String, subtitle: String, onClick: () -> Unit) {
                 shape = RoundedCornerShape(16.dp)
             )
             .padding(horizontal = 20.dp, vertical = 18.dp)
-            .semantics { contentDescription = title },
+            .semantics {
+                contentDescription = if (enabled) title else "$title, unavailable"
+            },
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text = title,
-            color = MaterialTheme.colorScheme.onBackground,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = contentAlpha),
             fontSize = 16.sp,
             fontWeight = FontWeight.Medium,
             letterSpacing = 3.sp,
@@ -357,7 +435,7 @@ private fun MenuEntry(title: String, subtitle: String, onClick: () -> Unit) {
         )
         Text(
             text = subtitle,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f * contentAlpha),
             fontSize = 11.sp,
             letterSpacing = 1.5.sp,
             maxLines = 1

@@ -677,14 +677,19 @@ class QaVerificationTest {
         assertTrue("level must be complete", controller.isComplete)
         val run = controller.lastResult
         assertNotNull("a completed run must be captured", run)
-        assertEquals("w1-2", run!!.levelId)
+        assertEquals("w1-2", run!!.contentId)
+        assertEquals(
+            "a campaign run records under the campaign namespace",
+            "campaign/w1-2",
+            run.key.storageKey
+        )
         assertEquals(solution.moveCount, run.moves)
         assertEquals(solution.pushCount, run.pushes)
 
         // Progress must have been written to the store at the same moment.
         val saved = store.load()
         assertTrue("completion must be persisted", saved.isCompleted("w1-2"))
-        assertNotNull("a medal must be awarded", saved.records.getValue("w1-2").bestMedal)
+        assertNotNull("a medal must be awarded", saved.recordFor("w1-2")!!.bestMedal)
 
         // And the next level must now be reachable.
         assertTrue(
@@ -701,7 +706,7 @@ class QaVerificationTest {
             "a reopened session must see the saved completion",
             reopened.progress.isCompleted("w1-2")
         )
-        assertEquals(run.moves, reopened.progress.records.getValue("w1-2").bestMoves)
+        assertEquals(run.moves, reopened.progress.recordFor("w1-2")!!.bestMoves)
 
         assertTrue(controller.continueToNextLevel())
         assertEquals("advance must land on w1-3", "w1-3", controller.level.id)

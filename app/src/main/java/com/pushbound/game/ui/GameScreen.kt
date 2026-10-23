@@ -43,9 +43,11 @@ import androidx.compose.ui.unit.sp
 import com.pushbound.game.Levels
 import com.pushbound.game.ads.AdPlacement
 import com.pushbound.game.data.SharedPreferencesProgressStore
-import com.pushbound.game.engine.GameMode
+import com.pushbound.game.data.SharedPreferencesSessionStore
+import com.pushbound.game.engine.ContentKey
 import com.pushbound.game.engine.Medal
 import com.pushbound.game.engine.ModeResolver
+import com.pushbound.game.progress.SessionStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -79,38 +81,78 @@ import kotlinx.coroutines.withContext
 /**
  * The playable screen.
  *
- * [startLevelId] opens a SPECIFIC level instead of resuming the campaign, which
- * is what the level-select screens need: a completed level must be replayable
- * on demand, not only resumed from where progress happens to point. Leaving it
- * null preserves the original behaviour exactly — resume where the player left
- * off, or level one on a fresh profile.
+ * [startKey] opens a SPECIFIC piece of content instead of resuming the campaign,
+ * which is what the level-select screens and the daily entry need: a completed
+ * level must be replayable on demand, and today's puzzle must be playable under
+ * its own `daily/<date>` identity. Leaving it null preserves the original
+ * behaviour — resume where campaign progress points, or level one on a fresh
+ * profile.
+ *
+ * THE KEY, NOT AN ID, IS WHAT OPENS A BOARD. It carries the mode, so the run
+ * that follows records and saves under the right namespace. Opening the same
+ * grid as a campaign level and as a daily puzzle therefore produces two
+ * independent runs with two independent records.
+ *
+ * [sessionStore] is where the resumable session is read from and written to.
+ * Passing the SAME store the menus use is what makes RESUME work across an app
+ * restart rather than only within one composition.
  *
  * [onExit] is the way back to the menus. When it is null the affordance is not
  * drawn at all, so a caller that does not want navigation is unaffected.
  */
 @Composable
 fun GameScreen(
-    startLevelId: String? = null,
+    startKey: ContentKey? = null,
+    sessionStore: SessionStore? = null,
     onExit: (() -> Unit)? = null
 ) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val progressStore = remember(context) { SharedPreferencesProgressStore(context) }
-    // Resume where this player left off rather than always at level one; with a
-    // fresh profile Progress.nextLevelId falls back to the first level.
+    // Defaults to the platform store so a caller that only needs gameplay (the
+    // animation tests, a preview) still gets a working, isolated session.
+    val sessions = sessionStore ?: remember(context) { SharedPreferencesSessionStore(context) }
+    // The KEY decides which board opens. When the caller does not name one —
+    // no level was picked and no session was resumed — the campaign's continue
+    // point is used, which is what a bare "play" affordance has always meant.
     //
-    // The AUTHORED campaign is used for this lookup: deciding which id to open
+    // The AUTHORED campaign is used for these lookups: deciding which id to open
     // is a structural question and must not drag the solver onto the startup
-    // path. The controller approves the single level it plays.
-    val controller = remember(scope, progressStore, startLevelId) {
+    // path. Exactly one level is then approved, by [Levels.byId].
+    val controller = remember(scope, progressStore, sessions, startKey) {
         // Resolve the STRUCTURE from the authored campaign (no solver), then
         // approve exactly the one level that will be played via Levels.byId.
-        val resumedId = startLevelId ?: ModeResolver.levelIdFor(
-            mode = GameMode.CampaignMode,
+        //
+        // The KEY decides both the board and the mode. Falling back to the
+        // campaign's continue point only happens when nothing asked for a
+        // specific piece of content, so a caller that names a daily always
+        // gets that daily — never a campaign level that happens to share its
+        // grid.
+        val key = startKey ?: ModeResolver.campaignContentKey(
             campaign = Levels.campaign,
             state = progressStore.load()
-        ) ?: Levels.campaign.allLevels.first().id
-        GameController(Levels.byId(resumedId)!!, scope, progressStore)
+        ) ?: ContentKey.campaign(Levels.campaign.allLevels.first().id)
+
+        // A campaign key names its level directly; a daily key names a DATE and
+        // the board has to be derived from it. `Levels.byId` is what actually
+        // APPROVES the level (approval runs the solver and is cached), so it is
+        // the single call that pays that cost — resolving through
+        // ModeResolver.levelFor alone would hand back the authored, unapproved
+        // form and the board would ship without its par times.
+        val boardId = if (key.isDaily) {
+            ModeResolver.levelIdFor(key.mode, Levels.campaign) ?: key.id
+        } else {
+            key.id
+        }
+        val level = Levels.byId(boardId) ?: Levels.campaign.allLevels.first()
+
+        GameController(
+            level = level,
+            startKey = key,
+            scope = scope,
+            progressStore = progressStore,
+            sessionStore = sessions
+        )
     }
 
     // Warm the NEXT level's validation off the main thread.
@@ -209,8 +251,9 @@ private fun LevelHeader(
             // this screen is pixel-for-pixel what it was before navigation
             // existed. The style matches the HUD's own letterspaced text.
             if (onExit != null) {
+                val backLabel = if (controller.contentKey.isDaily) "‹ MENU" else "‹ LEVELS"
                 Text(
-                    text = "‹ LEVELS",
+                    text = backLabel,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
                     fontSize = 13.sp,
                     letterSpacing = 2.5.sp,
@@ -226,17 +269,27 @@ private fun LevelHeader(
                         .padding(end = 18.dp)
                 )
             }
-            // "W1·2  FIRST STEPS" — where the player is, in the existing
-            // letterspaced display style. The position matters once a campaign
-            // is more than a handful of levels long, so it rides along with the
-            // name instead of taking a row of its own.
+            // THE MODE IS NAMED, not implied. A campaign level shows its
+            // position in the campaign — "W1·2  FIRST STEPS" — because that is
+            // what a player needs to know when picking from a world. A daily
+            // shows its DATE instead, because a daily has no position in the
+            // campaign at all: it is one board for one day, and printing a
+            // world/number on it would tell the player they are somewhere they
+            // are not.
+            val title = if (controller.contentKey.isDaily) {
+                "DAILY PUZZLE · ${controller.contentKey.id}"
+            } else {
+                "W${controller.level.world}·${controller.level.number}  " +
+                    controller.level.name.uppercase()
+            }
             Text(
-                text = "W${controller.level.world}·${controller.level.number}  " +
-                    controller.level.name.uppercase(),
+                text = title,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
                 fontSize = 13.sp,
                 letterSpacing = 2.5.sp,
-                maxLines = 1
+                maxLines = 1,
+                modifier = Modifier
+                    .semantics { contentDescription = "Playing $title" }
             )
         }
         // Both counters, always visible, exactly as the engine tracks them:

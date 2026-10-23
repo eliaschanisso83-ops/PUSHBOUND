@@ -1,5 +1,6 @@
 package com.pushbound.game.progress
 
+import com.pushbound.game.engine.ContentKey
 import com.pushbound.game.engine.Medal
 
 /**
@@ -44,17 +45,26 @@ class InMemoryProgressStore(initial: ProgressState = ProgressState()) : Progress
  *
  * ONE RECORD PER LINE, fields separated by '|':
  *
- *     <id>|<completed>|<medal>|<bestMoves>|<bestPushes>
+ *     <key>|<completed>|<medal>|<bestMoves>|<bestPushes>
  *
- * A missing optional value is written as '-'. Level ids come from
- * [com.pushbound.game.engine.LevelDefinition.slug], so they are lowercase
- * alphanumerics and hyphens and can never contain either separator — that is
- * asserted on write rather than assumed.
+ * THE KEY IS NAMESPACED — `campaign/w3-2` or `daily/2026-10-23`, i.e. a
+ * [ContentKey.storageKey]. Namespace and separator are both `/`-free inside the
+ * id part, and the ids themselves are lowercase alphanumerics, hyphens and
+ * digits, so neither separator can occur in a field. That is asserted on write
+ * rather than assumed.
+ *
+ * MIGRATION — an older build wrote bare level ids (`w3-2|1|GOLD|21|9`) into
+ * this same key, when the daily puzzle shared the campaign's id space. Those
+ * lines are read as CAMPAIGN records, which is what they always were: the daily
+ * that wrote them was in fact recording a campaign level, so classifying it as
+ * campaign keeps a player's progress exactly where they saw it. New writes are
+ * always namespaced, so the legacy shape appears once and never again.
  *
  * FORWARD COMPATIBILITY — an unrecognised line is SKIPPED rather than failing
  * the whole load, and an unrecognised medal falls back to no medal. A player
  * upgrading from a newer version to an older one keeps their progress instead
- * of losing it to a parse error.
+ * of losing it to a parse error. A line carrying a namespace this build does
+ * not know is skipped the same way.
  */
 object ProgressCodec {
 
@@ -64,10 +74,10 @@ object ProgressCodec {
 
     fun encode(state: ProgressState): String =
         state.records.values
-            .sortedBy { it.levelId }
+            .sortedBy { it.storageKey }
             .joinToString(separator = LINE_SEP.toString()) { record ->
                 listOf(
-                    record.levelId,
+                    record.storageKey,
                     if (record.completed) "1" else "0",
                     record.bestMedal?.name ?: ABSENT,
                     record.bestMoves?.toString() ?: ABSENT,
@@ -85,8 +95,17 @@ object ProgressCodec {
             val fields = line.split(FIELD_SEP)
             if (fields.size < 5) continue // malformed: skip, never throw
 
-            val id = fields[0]
-            if (id.isEmpty() || id.any { it == FIELD_SEP || it == LINE_SEP }) continue
+            val rawId = fields[0]
+            if (rawId.isEmpty() || rawId.any { it == FIELD_SEP || it == LINE_SEP }) continue
+
+            // A bare id predates mode namespacing and was always campaign
+            // content; a namespaced id must parse, or it belongs to a build with
+            // a mode this one does not have and is skipped rather than guessed at.
+            val storageKey = if ('/' in rawId) {
+                ContentKey.fromStorageKey(rawId)?.storageKey ?: continue
+            } else {
+                ContentKey.campaign(rawId).storageKey
+            }
 
             val completed = fields[1] == "1"
             val medal = fields[2].let { raw ->
@@ -96,8 +115,8 @@ object ProgressCodec {
             val moves = fields[3].toIntOrNull()?.takeIf { it >= 0 }
             val pushes = fields[4].toIntOrNull()?.takeIf { it >= 0 }
 
-            records[id] = LevelRecord(
-                levelId = id,
+            records[storageKey] = LevelRecord(
+                storageKey = storageKey,
                 completed = completed,
                 bestMedal = medal,
                 bestMoves = moves,
