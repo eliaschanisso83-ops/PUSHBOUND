@@ -280,8 +280,19 @@ class GameController(
             SavedSession(
                 key = contentKey,
                 current = SessionSnapshot.from(session.state),
-                undo = session.undoSnapshots().map { SessionSnapshot.from(it) },
-                redo = session.redoSnapshots().map { SessionSnapshot.from(it) },
+                // Only the TAIL of each history is persisted. The stacks hold one
+                // entry per move, so serialising all of them would make the
+                // saved payload grow without bound and rewrite it after every
+                // single move. Capping keeps the write a constant size however
+                // long the player wanders; undoing further back than the cap
+                // starts again from where the session was restored, which is a
+                // far better trade than a janky frame.
+                undo = session.undoSnapshots()
+                    .takeLast(MAX_PERSISTED_HISTORY)
+                    .map { SessionSnapshot.from(it) },
+                redo = session.redoSnapshots()
+                    .takeLast(MAX_PERSISTED_HISTORY)
+                    .map { SessionSnapshot.from(it) },
                 savedAtEpochMillis = System.currentTimeMillis()
             )
         )
@@ -602,5 +613,12 @@ class GameController(
 
     companion object {
         const val MOVE_ANIMATION_MS = 110L
+
+        /**
+         * How many of the most recent undo and redo snapshots a session save
+         * carries. Bounded so the persisted payload stays a constant size no
+         * matter how long the player wanders — see [persistSession].
+         */
+        const val MAX_PERSISTED_HISTORY = 60
     }
 }

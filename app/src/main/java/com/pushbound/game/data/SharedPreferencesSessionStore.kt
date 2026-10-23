@@ -34,11 +34,15 @@ class SharedPreferencesSessionStore(context: Context) : SessionStore {
         val editor = prefs.edit()
         if (session == null) editor.remove(KEY_SESSION)
         else editor.putString(KEY_SESSION, SessionCodec.encode(session))
-        // commit(), not apply(): a session is written at the moment the player
-        // LEAVES, and an asynchronous write can be lost if the process is killed
-        // right after. The payload is a few hundred bytes, so the cost is
-        // invisible and the guarantee is real.
-        editor.commit()
+        // apply(), not commit(): the session is rewritten after EVERY move, and
+        // commit() performs the disk write on the calling thread — which here is
+        // the UI thread, so a synchronous write would jank the very frame the
+        // player is watching. apply() updates the in-memory value immediately
+        // and flushes off-thread; the framework also waits for pending apply
+        // writes when the activity pauses, which is exactly when a session most
+        // needs to be on disk. This matches [SharedPreferencesProgressStore],
+        // for the same reason.
+        editor.apply()
     }
 
     private companion object {

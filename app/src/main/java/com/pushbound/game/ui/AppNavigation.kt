@@ -274,7 +274,11 @@ private fun MainMenuScreen(
             onClick = onResume
         )
         Spacer(Modifier.height(16.dp))
-        MenuEntry("CAMPAIGN", "CHOOSE A WORLD", onCampaign)
+        MenuEntry(
+            title = "CAMPAIGN",
+            subtitle = "CHOOSE A WORLD",
+            onClick = onCampaign
+        )
         Spacer(Modifier.height(16.dp))
         MenuEntry(
             title = "DAILY PUZZLE",
