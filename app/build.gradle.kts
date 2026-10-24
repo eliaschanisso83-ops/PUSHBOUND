@@ -23,10 +23,10 @@ plugins {
 // and only ad unit in the product. There is no banner, no interstitial and no
 // app-open unit, by design.
 // ---------------------------------------------------------------------------
-const val ADMOB_DEMO_APP_ID = "ca-app-pub-3940256099942544~3347511713"
-const val ADMOB_DEMO_REWARDED_UNIT = "ca-app-pub-3940256099942544/5224354917"
-const val ADMOB_PRODUCTION_APP_ID = "ca-app-pub-5147549053838908~5350410819"
-const val ADMOB_PRODUCTION_REWARDED_UNIT = "ca-app-pub-5147549053838908/7178497807"
+val ADMOB_DEMO_APP_ID = "ca-app-pub-3940256099942544~3347511713"
+val ADMOB_DEMO_REWARDED_UNIT = "ca-app-pub-3940256099942544/5224354917"
+val ADMOB_PRODUCTION_APP_ID = "ca-app-pub-5147549053838908~5350410819"
+val ADMOB_PRODUCTION_REWARDED_UNIT = "ca-app-pub-5147549053838908/7178497807"
 
 android {
     namespace = "com.pushbound.game"

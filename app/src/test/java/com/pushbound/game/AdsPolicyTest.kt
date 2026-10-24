@@ -586,15 +586,15 @@ class AdsPolicyTest {
         //    declared. This is what pins the actual values.
         assertTrue(
             "the production rewarded unit constant must be Pushbound_Rewarded_Hint",
-            gradle.contains("const val ADMOB_PRODUCTION_REWARDED_UNIT = \"$PRODUCTION_REWARDED_UNIT\"")
+            gradle.contains("val ADMOB_PRODUCTION_REWARDED_UNIT = \"$PRODUCTION_REWARDED_UNIT\"")
         )
         assertTrue(
             "the production app id constant must be Pushbound's AdMob app id",
-            gradle.contains("const val ADMOB_PRODUCTION_APP_ID = \"$PRODUCTION_APP_ID\"")
+            gradle.contains("val ADMOB_PRODUCTION_APP_ID = \"$PRODUCTION_APP_ID\"")
         )
         assertTrue(
             "the demo rewarded unit constant must be Google's demo unit",
-            gradle.contains("const val ADMOB_DEMO_REWARDED_UNIT = \"$DEMO_REWARDED_UNIT\"")
+            gradle.contains("val ADMOB_DEMO_REWARDED_UNIT = \"$DEMO_REWARDED_UNIT\"")
         )
 
         // 2. Each build type must REFERENCE the right constant. The literals
