@@ -245,6 +245,31 @@ means changing one implementation — gameplay, the hint gate and the offer dial
 do not need to know a purchase happened. No rewrite of the gameplay system is
 required.
 
+### What Google Play requires before a one-time product can exist
+
+Play will not let you create a one-time product until the uploaded APK carries
+the `com.android.vending.BILLING` permission; until then it reports that the
+application has no in-app products and that one is needed to add them.
+
+**That permission is absent from Pushbound today, deliberately.** The game has
+no products, so declaring it would advertise a capability the app does not have
+— and Play reviews permissions that do nothing. It should arrive with the
+billing library when the feature is actually built, never by editing the
+manifest by hand. As a normal-level permission it adds no runtime prompt; it
+simply states that billing is in use.
+
+Adding it is the start of the feature rather than a configuration tweak, and it
+must ship in the same release as:
+
+- the `mayAdsBeShown()` predicate at the `AdsGateway` boundary;
+- the product itself, created in Play Console against an **unused, higher
+  versionCode**;
+- **an update to the legal pages.** Pushbound's current Terms of Use and
+  Privacy Policy state that the game has **no in-app purchases** and that
+  Remove Ads is planned only. Those sentences stop being true the moment this
+  ships, so both pages must be revised together with the code — the same rule
+  that governed the rewarded-advertising release above.
+
 ---
 
 ## 9. The GameHub monetization standard
