@@ -35,7 +35,19 @@ enum class HintAccess {
      * configured, or offline). The hint is withheld. Play continues normally —
      * a hint is optional by definition and its absence blocks nothing.
      */
-    DENIED
+    DENIED,
+
+    /**
+     * The free allowance is spent and an ad is offerable, but it is not LOADED
+     * yet — it would have to be fetched first.
+     *
+     * The difference from [OFFER_REWARDED_AD] matters to the player's informed
+     * consent: there we can promise an ad immediately, here we can only promise
+     * an ATTEMPT at one. The confirmation copy changes accordingly, and a fetch
+     * that fails reports back rather than showing a spinner forever. Rewarding
+     * for a fetched ad is identical once it plays.
+     */
+    OFFER_REWARDED_AD_FETCH
 }
 
 /**
@@ -65,12 +77,39 @@ object HintGate {
     /** Free hints per level attempt. Deliberately small and deliberately free. */
     const val FREE_HINTS_PER_LEVEL = 3
 
-    /** What happens when the player asks for a hint right now. */
-    fun access(state: HintAllowance, rewardedAvailable: Boolean): HintAccess = when {
-        state.freeUsed < FREE_HINTS_PER_LEVEL -> HintAccess.GRANTED_FREE
-        rewardedAvailable -> HintAccess.OFFER_REWARDED_AD
-        else -> HintAccess.DENIED
-    }
+    /**
+     * What happens when the player asks for a hint right now.
+     *
+     * [rewardedAvailability] is the SDK's honest state, not a boolean the caller
+     * chose: [RewardedAvailability.READY] and [RewardedAvailability.LOADING] are
+     * both offerable but say different things about what the player is agreeing
+     * to, so they map to different offers. Anything else is unavailable, and an
+     * unavailable ad is never a reason to withhold a hint that is still free.
+     */
+    fun access(state: HintAllowance, rewardedAvailability: RewardedAvailability): HintAccess =
+        when {
+            state.freeUsed < FREE_HINTS_PER_LEVEL -> HintAccess.GRANTED_FREE
+            rewardedAvailability == RewardedAvailability.READY ->
+                HintAccess.OFFER_REWARDED_AD
+            rewardedAvailability == RewardedAvailability.LOADING ->
+                HintAccess.OFFER_REWARDED_AD_FETCH
+            else -> HintAccess.DENIED
+        }
+
+    /**
+     * Boolean convenience overload for callers that genuinely only know
+     * yes/no. Maps "yes" to the best offerable state, so it can never claim an
+     * ad is loaded when nothing was fetched.
+     */
+    fun access(state: HintAllowance, rewardedAvailable: Boolean): HintAccess =
+        access(
+            state,
+            if (rewardedAvailable) RewardedAvailability.READY else RewardedAvailability.UNAVAILABLE
+        )
+
+    /** Both ad-backed offers are the same decision to the player. */
+    fun isOfferedRewarded(access: HintAccess): Boolean =
+        access == HintAccess.OFFER_REWARDED_AD || access == HintAccess.OFFER_REWARDED_AD_FETCH
 
     /** Consumes one of the free hints. Only called when the free path was taken. */
     fun onFreeHintUsed(state: HintAllowance): HintAllowance =

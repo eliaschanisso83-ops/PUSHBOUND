@@ -9,6 +9,36 @@
         android:theme="@style/Theme.Pushbound">
 
         <!--
+            GOOGLE MOBILE ADS — APP ID.
+
+            Supplied per build type by `manifestPlaceholders` in
+            app/build.gradle.kts: debug builds carry Google's demo App ID so
+            development and QA never touch live inventory, and only the release
+            build type opts into the production App ID. A missing or malformed
+            value crashes at start-up, so this is the one ad setting that must
+            always resolve.
+
+            NO `<uses-permission>` IS DECLARED HERE, deliberately.
+
+            The shipped APK DOES have android.permission.INTERNET,
+            android.permission.ACCESS_NETWORK_STATE and
+            com.google.android.gms.permission.AD_ID — but they arrive from the
+            advertising SDK's own manifest through normal manifest merging, not
+            because Pushbound asked for them. That distinction is the offline
+            guarantee in its honest form: no gameplay code requests a network,
+            and the network that exists exists only so a player who explicitly
+            chose to watch an ad can be served one.
+
+            Pushbound is fully playable with no connectivity at all. An ad that
+            cannot be fetched simply reports itself unavailable and the hint
+            offer says so; nothing about progress, medals or the board depends
+            on being online.
+        -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="${admobAppId}" />
+
+        <!--
             No forced orientation: the window rotates naturally between
             PORTRAIT and LANDSCAPE and the single gameplay screen adapts
             (GameScreen/GameLayout). The activity handles the configuration

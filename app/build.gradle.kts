@@ -4,6 +4,30 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// ---------------------------------------------------------------------------
+// Google AdMob identifiers.
+//
+// THESE ARE PUBLISHABLE IDENTIFIERS, NOT SECRETS. An AdMob App ID and an ad
+// unit ID are compiled into every APK and can be read out of it by anyone who
+// downloads the app; Google documents them as values you are expected to ship
+// in source. They are therefore in a versioned file on purpose, and they are
+// entirely separate from the signing material governed by the rules below.
+//
+// DEVELOPMENT AND QA USE GOOGLE'S OWN DEMO INVENTORY. The defaults are Google's
+// demo App ID and demo REWARD unit, so a debug build can exercise the whole
+// hint-for-an-ad flow as often as anyone likes without ever touching live
+// inventory or risking invalid activity on the production account. Only the
+// `release` build type explicitly opts into the production pair below.
+//
+// Pushbound_Rewarded_Hint (ca-app-pub-5147549053838908/7178497807) is the one
+// and only ad unit in the product. There is no banner, no interstitial and no
+// app-open unit, by design.
+// ---------------------------------------------------------------------------
+const val ADMOB_DEMO_APP_ID = "ca-app-pub-3940256099942544~3347511713"
+const val ADMOB_DEMO_REWARDED_UNIT = "ca-app-pub-3940256099942544/5224354917"
+const val ADMOB_PRODUCTION_APP_ID = "ca-app-pub-5147549053838908~5350410819"
+const val ADMOB_PRODUCTION_REWARDED_UNIT = "ca-app-pub-5147549053838908/7178497807"
+
 android {
     namespace = "com.pushbound.game"
     compileSdk = 35
@@ -14,6 +38,11 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+
+        // Safe-by-default: unless a build type says otherwise, ads resolve to
+        // Google's demo inventory. Nothing can reach production by omission.
+        manifestPlaceholders["admobAppId"] = ADMOB_DEMO_APP_ID
+        buildConfigField("String", "REWARDED_AD_UNIT_ID", "\"$ADMOB_DEMO_REWARDED_UNIT\"")
     }
 
     // -----------------------------------------------------------------------
@@ -58,6 +87,17 @@ android {
             if (releaseSigningReady) {
                 signingConfig = signingConfigs.getByName("release")
             }
+
+            // THE ONLY PLACE PRODUCTION AD INVENTORY IS WIRED IN. Reaching this
+            // block means the build is signed with the permanent production
+            // keystore and is a release artifact, which is what "ready for real
+            // production advertising" means here.
+            manifestPlaceholders["admobAppId"] = ADMOB_PRODUCTION_APP_ID
+            buildConfigField(
+                "String",
+                "REWARDED_AD_UNIT_ID",
+                "\"$ADMOB_PRODUCTION_REWARDED_UNIT\""
+            )
         }
     }
 
@@ -72,6 +112,10 @@ android {
 
     buildFeatures {
         compose = true
+        // Needed for BuildConfig.REWARDED_AD_UNIT_ID, which is how the ad unit
+        // is selected per build type without putting an identifier in source
+        // that debug builds could accidentally ship.
+        buildConfig = true
     }
 }
 
@@ -86,6 +130,23 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
+
+    // -----------------------------------------------------------------------
+    // Advertising — REWARDED ONLY.
+    //
+    // play-services-ads brings the ad formats; Pushbound uses exactly one of
+    // them, on the Pushbound_Rewarded_Hint unit. Nothing in this file activates
+    // a format: the SDK being on the classpath does not show an ad, and the
+    // only code that can is [AdMobAdsGateway], reached solely through a player
+    // confirming the hint offer.
+    //
+    // user-messaging-platform (UMP) is Google's consent SDK. It is required to
+    // request ads lawfully in regulated regions, and it is deliberately invoked
+    // LAZILY on the first confirmed offer rather than at launch, so the game's
+    // opening frames are never interrupted by it.
+    // -----------------------------------------------------------------------
+    implementation("com.google.android.gms:play-services-ads:25.5.0")
+    implementation("com.google.android.ump:user-messaging-platform:3.2.0")
 
     testImplementation("junit:junit:4.13.2")
 }

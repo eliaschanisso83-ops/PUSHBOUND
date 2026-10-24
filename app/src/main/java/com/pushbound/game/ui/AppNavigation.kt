@@ -44,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pushbound.game.Levels
 import com.pushbound.game.R
+import com.pushbound.game.ads.AdsGateway
+import com.pushbound.game.ads.NoOpAdsGateway
 import com.pushbound.game.data.SharedPreferencesProgressStore
 import com.pushbound.game.data.SharedPreferencesSessionStore
 import com.pushbound.game.engine.ContentKey
@@ -108,7 +110,18 @@ sealed interface Destination {
  * the one level actually played is approved by [GameScreen] when it opens.
  */
 @Composable
-fun PushboundApp() {
+fun PushboundApp(
+    /**
+     * The advertising seam the whole game talks through.
+     *
+     * Defaults to [NoOpAdsGateway] so a preview, an instrumented test, or a
+     * build without the SDK behaves exactly as it does today — no network, no
+     * ads, hints still granted from the free allowance. Only [MainActivity]
+     * supplies a real one, which keeps AdMob an application-shell concern
+     * rather than something navigation knows about.
+     */
+    ads: AdsGateway = NoOpAdsGateway
+) {
     val context = LocalContext.current
     val progressStore = remember(context) { SharedPreferencesProgressStore(context) }
     val sessionStore = remember(context) { SharedPreferencesSessionStore(context) }
@@ -173,6 +186,7 @@ fun PushboundApp() {
         is Destination.Play -> GameScreen(
             startKey = current.key,
             sessionStore = sessionStore,
+            ads = ads,
             onExit = {
                 reloadProgress()
                 // Back out to where this MODE lives: a campaign level returns to

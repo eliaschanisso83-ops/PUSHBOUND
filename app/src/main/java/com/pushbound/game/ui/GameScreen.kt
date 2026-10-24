@@ -38,10 +38,13 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.pushbound.game.Levels
 import com.pushbound.game.ads.AdPlacement
+import com.pushbound.game.ads.AdsGateway
+import com.pushbound.game.ads.NoOpAdsGateway
 import com.pushbound.game.data.SharedPreferencesProgressStore
 import com.pushbound.game.data.SharedPreferencesSessionStore
 import com.pushbound.game.engine.ContentKey
@@ -104,6 +107,13 @@ import kotlinx.coroutines.withContext
 fun GameScreen(
     startKey: ContentKey? = null,
     sessionStore: SessionStore? = null,
+    /**
+     * The advertising seam, threaded down to the controller. Defaults to
+     * [NoOpAdsGateway] so tests, previews and any caller that does not care
+     * get the no-ad behaviour with no extra argument — and so the controller
+     * never has to know whether a real SDK is present.
+     */
+    ads: AdsGateway = NoOpAdsGateway,
     onExit: (() -> Unit)? = null
 ) {
     val scope = rememberCoroutineScope()
@@ -119,7 +129,7 @@ fun GameScreen(
     // The AUTHORED campaign is used for these lookups: deciding which id to open
     // is a structural question and must not drag the solver onto the startup
     // path. Exactly one level is then approved, by [Levels.byId].
-    val controller = remember(scope, progressStore, sessions, startKey) {
+    val controller = remember(scope, progressStore, sessions, startKey, ads) {
         // Resolve the STRUCTURE from the authored campaign (no solver), then
         // approve exactly the one level that will be played via Levels.byId.
         //
@@ -151,7 +161,8 @@ fun GameScreen(
             startKey = key,
             scope = scope,
             progressStore = progressStore,
-            sessionStore = sessions
+            sessionStore = sessions,
+            ads = ads
         )
     }
 
@@ -230,7 +241,35 @@ fun GameScreen(
                 ControlsBar(controller)
             }
         }
+
+        // The hint notice is a status line, never a gate: it explains why
+        // nothing happened and leaves the board fully playable underneath.
+        val notice = controller.hintNotice
+        if (notice != null) {
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 20.dp, vertical = 96.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = notice,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.70f),
+                    fontSize = 13.sp,
+                    letterSpacing = 0.4.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .background(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(10.dp)
+                        )
+                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                )
+            }
+        }
+
         CompletionOverlay(controller)
+        RewardedHintDialog(controller)
     }
 }
 
@@ -302,6 +341,137 @@ private fun LevelHeader(
             letterSpacing = 1.5.sp,
             maxLines = 1
         )
+    }
+}
+
+/**
+ * The rewarded-hint confirmation — the whole "optional value exchange", made
+ * visible.
+ *
+ * WHAT MAKES THIS AN OFFER RATHER THAN AN INTERRUPTION:
+ *
+ *  - It appears ONLY after the player has tapped Hint with the free allowance
+ *    spent. Nothing here is scheduled, automatic, or shown at a moment the
+ *    player did not choose.
+ *  - It states the reward BEFORE the choice ("one more hint"), states that an
+ *    ad will be shown, and states that it is optional.
+ *  - "Not now" is a first-class, equally reachable exit that costs nothing:
+ *    dismissing leaves the board, the counters and the free allowance exactly
+ *    as they were.
+ *  - The ad is only requested by [GameController.confirmRewardedHint], of which
+ *    this dialog is the sole caller. Tapping Hint can never open an ad.
+ *
+ * WHY THE COPY DIFFERS BY [RewardedHintOffer.willFetch] — promising an ad that
+ * is already loaded and promising to try to fetch one are different promises,
+ * and consent should be informed. When an ad must be fetched the wording says
+ * so, and a fetch that then fails is reported back as unavailability rather
+ * than as something the player did wrong.
+ *
+ * Same tint and shape family as [CompletionOverlay], so it reads as part of the
+ * game rather than as something that arrived from outside it.
+ */
+@Composable
+private fun RewardedHintDialog(controller: GameController) {
+    val offer = controller.rewardedHintOffer ?: return
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0x992B2622))
+            // The board under the scrim is inert, but the two buttons inside
+            // the dialog stay live — this gesture detector only swallows the
+            // touches that actually reach it.
+            .pointerInput(Unit) { detectTapGestures { } },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Color(0xFFF1EADD),
+            shadowElevation = 10.dp
+        ) {
+            Column(
+                Modifier.padding(horizontal = 30.dp, vertical = 26.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Need a hand?",
+                    color = Color(0xFF2B2622),
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.Medium
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                Text(
+                    // The reward, stated first and stated plainly. A player has
+                    // to know what they are getting before they can decide.
+                    text = "Watch a short ad to get one more hint for this puzzle.",
+                    color = Color(0xFF2B2622).copy(alpha = 0.85f),
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 21.sp
+                )
+
+                Spacer(Modifier.height(8.dp))
+
+                Text(
+                    text = if (offer.willFetch) {
+                        "A short ad will be loaded, then shown. It's optional — you can " +
+                            "keep playing without it, and nothing about your progress changes."
+                    } else {
+                        "A short ad will be shown. It's optional — you can keep playing " +
+                            "without it, and nothing about your progress changes."
+                    },
+                    color = Color(0xFF2B2622).copy(alpha = 0.62f),
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 18.sp
+                )
+
+                Spacer(Modifier.height(20.dp))
+
+                Button(
+                    onClick = controller::confirmRewardedHint,
+                    enabled = !controller.rewardedHintPending,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF2B2622),
+                        contentColor = Color(0xFFF3EDE2)
+                    )
+                ) {
+                    Text(
+                        text = if (controller.rewardedHintPending) {
+                            "Loading…"
+                        } else {
+                            "Watch ad, get hint"
+                        },
+                        fontSize = 15.sp,
+                        letterSpacing = 1.sp
+                    )
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                // DECLINING COSTS NOTHING. This is the exit the rules require, so
+                // it is always present and never de-emphasised into an
+                // afterthought: one equally sized tap, directly beneath.
+                Button(
+                    onClick = controller::dismissRewardedHint,
+                    enabled = !controller.rewardedHintPending,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF2B2622).copy(alpha = 0.08f),
+                        contentColor = Color(0xFF2B2622)
+                    )
+                ) {
+                    Text(
+                        text = "Not now",
+                        fontSize = 15.sp,
+                        letterSpacing = 1.sp
+                    )
+                }
+            }
+        }
     }
 }
 

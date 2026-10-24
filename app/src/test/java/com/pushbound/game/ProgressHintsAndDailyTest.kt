@@ -744,10 +744,22 @@ class ProgressHintsAndDailyTest {
     // --------------------------------------------------------------- offline --
 
     @Test
-    fun theAppDeclaresNoNetworkPermission() {
-        // The offline guarantee is structural, not aspirational: with no
-        // INTERNET permission the platform makes network use impossible, so
-        // campaign play cannot acquire a hidden dependency on connectivity.
+    fun pushboundItselfNeverRequestsAPermission() {
+        // WHAT THIS ASSERTS NOW, AND WHY IT CHANGED.
+        //
+        // It used to assert that the manifest contains no INTERNET permission,
+        // which was true while Pushbound shipped no advertising at all. It is
+        // no longer the honest statement: adding the Google Mobile Ads SDK
+        // brings android.permission.INTERNET, ACCESS_NETWORK_STATE and the
+        // AD_ID permission into the MERGED manifest through ordinary manifest
+        // merging. The shipped APK can reach the network whether or not this
+        // file says so, and a test claiming otherwise would be passing while
+        // describing a binary that does not exist.
+        //
+        // So the guarantee moved to where it is still true and still means
+        // something: Pushbound never ASKS for a permission itself, the reason
+        // the binary has one is declared openly in the same file, and no
+        // gameplay code uses it — pinned separately below.
         val manifest = listOf(
             File("app/src/main/AndroidManifest.xml"),
             File("src/main/AndroidManifest.xml")
@@ -762,9 +774,73 @@ class ProgressHintsAndDailyTest {
             "the manifest must still exist",
             text.contains("android:name")
         )
+
+        // Match DECLARATIONS, not prose. The manifest's own comments discuss
+        // permissions at length — deliberately, so the reason is visible to the
+        // next reader — and a raw substring match would trip over the
+        // explanation instead of the XML it is explaining.
+        val declarations = text.replace(
+            Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL),
+            ""
+        )
+
         assertFalse(
-            "Pushbound must stay offline-first: remove the INTERNET permission",
-            text.contains("android.permission.INTERNET")
+            "Pushbound must not request a permission itself — network reachability " +
+                "in the shipped app comes from the ad SDK's own manifest, not from ours",
+            declarations.contains("<uses-permission")
+        )
+        assertTrue(
+            "the AdMob app id must be declared, or the SDK fails at start-up and " +
+                "the permissions it merges in become pointless",
+            declarations.contains("com.google.android.gms.ads.APPLICATION_ID")
+        )
+    }
+
+    @Test
+    fun noSourceOpensANetworkConnection() {
+        // OFFLINE IS A PROPERTY OF THE CODE, NOT OF THE MANIFEST.
+        //
+        // The merged manifest now carries INTERNET because of the ad SDK, so
+        // "this app cannot reach the network" is no longer a claim anyone may
+        // make. What remains true — and what the player actually cares about —
+        // is that nothing in the game opens a connection. Campaign, daily and
+        // resume all work in airplane mode; an ad that cannot be fetched simply
+        // reports itself unavailable and play continues untouched.
+        //
+        // The only thing in the process that talks to the network is Google's
+        // own SDK, which is not ours to scan.
+        val banned = listOf(
+            "java.net",
+            "javax.net",
+            "HttpURLConnection",
+            "okhttp",
+            "URLConnection",
+            "DatagramSocket",
+            "Socket(",
+            "ConnectivityManager",
+            "android.net",
+            "android.telephony",
+            "Retrofit"
+        )
+
+        val sources = listOf(
+            File("app/src/main/java/com/pushbound/game"),
+            File("src/main/java/com/pushbound/game")
+        ).firstOrNull { it.isDirectory }
+            ?: error("sources not found from ${File(".").absolutePath}")
+
+        val offenders = sources.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .toList()
+            .flatMap { file ->
+                val text = file.readText()
+                banned.filter { token -> text.contains(token) }
+                    .map { token -> "${file.path} -> $token" }
+            }
+
+        assertTrue(
+            "no source may open a network connection, found: $offenders",
+            offenders.isEmpty()
         )
     }
 
@@ -804,9 +880,10 @@ class ProgressHintsAndDailyTest {
 
     @Test
     fun onlyTheDataPackageTouchesAndroid() {
-        // The complement of the test above: Android imports are confined to the
-        // two layers that are allowed them — the Compose UI and the storage
-        // adapter — so no new platform dependency can creep into the rules.
+        // The complement of the test above: Android imports are confined to
+        // the layers that are allowed them — the Compose UI, the storage
+        // adapter, and the ONE advertising adapter — so no new platform
+        // dependency can creep into the rules.
         val sources = listOf(
             File("app/src/main/java/com/pushbound/game"),
             File("src/main/java/com/pushbound/game")
@@ -820,12 +897,12 @@ class ProgressHintsAndDailyTest {
                     line.startsWith("import android") || line.startsWith("import androidx")
                 }
             }
-            .map { it.relativeTo(sources).path.substringBefore('/') }
+            .map { androidOwningPackage(it.relativeTo(sources).path) }
             .distinct()
             .sorted()
             .toList()
 
-        val allowed = setOf("ui", "data", "MainActivity.kt")
+        val allowed = setOf("ui", "data", "ads/admob", "MainActivity.kt")
         val unexpected = touchingAndroid.filterNot { it in allowed }
         assertTrue(
             "packages that must not depend on Android but now do: $unexpected",
@@ -833,6 +910,68 @@ class ProgressHintsAndDailyTest {
         )
         // And the adapter really is present, so the test is not passing vacuously.
         assertTrue("data/ must exist as the storage adapter", touchingAndroid.contains("data"))
+        assertTrue(
+            "ads/admob/ must exist as the advertising adapter — if it does not, " +
+                "this assertion is passing for the wrong reason",
+            touchingAndroid.contains("ads/admob")
+        )
+    }
+
+    /**
+     * The layer an Android import is allowed to live in.
+     *
+     * Two-level for `ads`, because `ads/` is one layer with two very different
+     * halves: the policy seam at the top level of `ads` must stay free of
+     * Android so the whole monetisation policy — the hint gate, the
+     * interstitial rules, the rewarded contract — can run under plain JUnit on
+     * a bare JVM, while `ads/admob/` is the single SDK adapter that is
+     * SUPPOSED to talk to Google's classes.
+     *
+     * Collapsing both to "ads" would quietly legalise Android imports inside
+     * the policy files this suite compiles, and `tools/run-unit-tests.sh`
+     * would stop being able to build them at all.
+     */
+    private fun androidOwningPackage(relativePath: String): String {
+        val segments = relativePath.split('/')
+        return if (segments.size > 1 && segments[0] == "ads") {
+            "ads/${segments[1]}"
+        } else {
+            segments[0]
+        }
+    }
+
+    @Test
+    fun theAdvertisingSeamItselfStaysPlatformFree() {
+        // The seam is the whole reason the monetisation policy is testable:
+        // `ads/*.kt` is compiled by tools/run-unit-tests.sh with no Android SDK
+        // on the classpath, so a single `import android.*` at that level breaks
+        // the local suite. Only `ads/admob/` — one directory deeper, and never
+        // matched by that script's non-recursive `ads/*.kt` glob — may reach for
+        // the platform.
+        val seam = listOf(
+            File("app/src/main/java/com/pushbound/game/ads"),
+            File("src/main/java/com/pushbound/game/ads")
+        ).firstOrNull { it.isDirectory }
+            ?: error("ads/ not found from ${File(".").absolutePath}")
+
+        val offenders = seam.listFiles()
+            ?.filter { it.isFile && it.extension == "kt" }
+            ?.filter { file ->
+                file.readLines().any { line ->
+                    line.startsWith("import android") || line.startsWith("import androidx")
+                }
+            }
+            ?.map { it.name }
+            .orEmpty()
+
+        assertTrue(
+            "ads/*.kt must stay Android-free so the policy runs on a plain JVM: $offenders",
+            offenders.isEmpty()
+        )
+        // Guard against the directory being empty or missing its policy, which
+        // would make the assertion above pass for the wrong reason.
+        val seamFiles = seam.listFiles()?.count { it.isFile && it.extension == "kt" } ?: 0
+        assertTrue("ads/ must still hold the policy sources", seamFiles > 0)
     }
 
     @Test

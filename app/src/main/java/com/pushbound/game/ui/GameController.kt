@@ -12,6 +12,8 @@ import com.pushbound.game.ads.HintGate
 import com.pushbound.game.ads.InterstitialPolicy
 import com.pushbound.game.ads.InterstitialState
 import com.pushbound.game.ads.NoOpAdsGateway
+import com.pushbound.game.ads.RewardedAvailability
+import com.pushbound.game.ads.RewardedOutcome
 import com.pushbound.game.engine.ContentKey
 import com.pushbound.game.engine.Direction
 import com.pushbound.game.engine.GameSession
@@ -36,6 +38,31 @@ import kotlinx.coroutines.launch
 
 /** One animated push, expressed in grid coordinates. */
 data class PushAnim(val from: Position, val to: Position, val id: Long)
+
+/**
+ * How a hint was paid for, so it lands in the right column of
+ * [HintAllowance].
+ */
+private enum class HintCharge { FREE, REWARDED }
+
+/**
+ * The confirmation the player must answer before any rewarded ad is requested.
+ *
+ * Pure data so the whole decision — including what the player will be told —
+ * is inspectable and testable without an SDK.
+ *
+ * [willFetch] changes the PROMISE, not the price. When it is true no ad is
+ * loaded yet, so the confirmation says an ad will be attempted rather than
+ * claiming one is ready; a fetch that then fails is reported as unavailable
+ * and grants nothing. Rewarding a fetched ad works exactly as it does for a
+ * preloaded one.
+ */
+data class RewardedHintOffer(
+    /** The SDK's honest state, used to word the confirmation accurately. */
+    val availability: RewardedAvailability,
+    /** True when showing would have to fetch an ad first. */
+    val willFetch: Boolean
+)
 
 /**
  * The logical move the renderer should animate right now: which visual kind
@@ -214,6 +241,30 @@ class GameController(
      * the player has already left.
      */
     var hintPending by mutableStateOf(false)
+        private set
+
+    /**
+     * The rewarded-ad confirmation the player must answer, or null.
+     *
+     * THIS IS THE WHOLE "OPTIONAL VALUE EXCHANGE". Asking for a hint past the
+     * free allowance NEVER opens an ad: it sets this state, the UI explains
+     * what will be shown and what will be granted, and the ad is only requested
+     * once the player explicitly confirms. Declining leaves the game exactly as
+     * it was — no hint, no charge, nothing lost.
+     *
+     * Held as observable state rather than a callback so the confirmation
+     * SURVIVES a recomposition, and so a move, restart or level change can
+     * simply null it and forget the offer.
+     */
+    var rewardedHintOffer by mutableStateOf<RewardedHintOffer?>(null)
+        private set
+
+    /**
+     * True while a confirmed ad is being fetched or shown. Guards against the
+     * player tapping Confirm twice and opening two ads, and lets the UI show
+     * that something is happening.
+     */
+    var rewardedHintPending by mutableStateOf(false)
         private set
 
     // --- advertising policy ------------------------------------------------
@@ -478,40 +529,125 @@ class GameController(
      * mid-range ARM device — doing that synchronously would freeze the frame
      * the tap belongs to. The request returns immediately; the result lands on
      * [activeHint] when it is ready.
+     *
+     * AN AD IS NEVER OPENED HERE. Past the free allowance this raises
+     * [rewardedHintOffer] and returns; the ad is requested only by
+     * [confirmRewardedHint], which the player can only reach by confirming.
      */
     fun requestHint() {
         if (isComplete) return
+        if (rewardedHintOffer != null || rewardedHintPending) return
 
-        when (HintGate.access(hintAllowance, ads.isRewardedAvailable())) {
-            HintAccess.GRANTED_FREE -> grantHintAsync()
+        val access = HintGate.access(hintAllowance, ads.rewardedAvailability())
+        when (access) {
+            HintAccess.GRANTED_FREE -> grantHintAsync(HintCharge.FREE)
 
-            HintAccess.OFFER_REWARDED_AD -> ads.showRewarded(
-                onReward = {
-                    hintAllowance = HintGate.onRewardEarned(hintAllowance)
-                    interstitialState = InterstitialPolicy.onRewardedShown(
-                        interstitialState, System.currentTimeMillis()
-                    )
-                    grantHintAsync()
-                },
-                onSkipped = {
-                    hintNotice = "No hint this time — the ad was skipped."
-                    refreshHintAccess()
-                }
-            )
+            // The offer is RAISED, not acted on: the player still has to say yes.
+            //
+            // Note that no ad is fetched here. The rule is that an ad is loaded
+            // only after the player has explicitly chosen to watch one, so the
+            // request begins in confirmRewardedHint() — asking for a hint is not
+            // yet choosing to watch anything.
+            HintAccess.OFFER_REWARDED_AD, HintAccess.OFFER_REWARDED_AD_FETCH -> {
+                rewardedHintOffer = RewardedHintOffer(
+                    availability = ads.rewardedAvailability(),
+                    willFetch = access == HintAccess.OFFER_REWARDED_AD_FETCH
+                )
+            }
 
             HintAccess.DENIED -> {
+                // No free hints and no ad that can be offered. The notice is
+                // about the allowance, which is the part the player can act on.
+                //
+                // Also nudges the SDK to retry in the background. If the ad was
+                // unavailable because a load failed a moment ago, the next tap
+                // can offer again — a brief dip in connectivity should not kill
+                // advertising for the rest of the session. Where consent was
+                // refused this is a no-op, so the player is never re-asked.
+                ads.preloadRewarded()
                 hintNotice = "No hints left for this attempt. Restart to get more."
                 refreshHintAccess()
             }
         }
     }
 
-    private fun grantHintAsync() {
+    /**
+     * The player confirmed they want to watch an ad for a hint.
+     *
+     * Nothing here touches progress, medals, counters or the board: the only
+     * thing that can change is that a hint arrives, and only if the SDK reports
+     * [RewardedOutcome.REWARDED]. Every other outcome is reported back to the
+     * player and the game continues exactly as it was.
+     */
+    fun confirmRewardedHint() {
+        val offer = rewardedHintOffer ?: return
+        if (rewardedHintPending) return
+        rewardedHintPending = true
+
+        ads.showRewarded { outcome ->
+            rewardedHintPending = false
+            rewardedHintOffer = null
+            when (outcome) {
+                RewardedOutcome.REWARDED -> {
+                    hintAllowance = HintGate.onRewardEarned(hintAllowance)
+                    interstitialState = InterstitialPolicy.onRewardedShown(
+                        interstitialState, System.currentTimeMillis()
+                    )
+                    grantHintAsync(HintCharge.REWARDED)
+                }
+
+                RewardedOutcome.UNAVAILABLE -> {
+                    // Nothing was shown and nothing was lost. The distinction
+                    // from SKIPPED matters: the player made no decision, so the
+                    // message says the ad was unavailable rather than blaming
+                    // them for skipping it.
+                    hintNotice = if (offer.willFetch) {
+                        "Couldn't load an ad just now. Your hint is untouched — try again, or keep playing."
+                    } else {
+                        "No ad available right now. Your hint is untouched — try again, or keep playing."
+                    }
+                    refreshHintAccess()
+                }
+
+                // The player was shown a consent form and did not grant
+                // consent, so no ad was ever put on screen. Saying "the ad
+                // wasn't finished" would blame them for not watching something
+                // they never saw — and, more importantly, nothing was lost.
+                RewardedOutcome.DISMISSED -> {
+                    hintNotice =
+                        "No ad was shown, so no hint this time. Nothing else changed."
+                    refreshHintAccess()
+                }
+
+                RewardedOutcome.SKIPPED -> {
+                    // Closed before the reward callback: no hint, by Google's own
+                    // reward rules. Declining costs the player nothing else.
+                    hintNotice = "No hint this time — the ad wasn't finished."
+                    refreshHintAccess()
+                }
+            }
+        }
+    }
+
+    /**
+     * The player dismissed the confirmation. Nothing is granted, nothing is
+     * charged, and no ad is ever requested — this is the "Not now" path and it
+     * must leave the game exactly as it found it.
+     */
+    fun dismissRewardedHint() {
+        if (rewardedHintPending) return
+        rewardedHintOffer = null
+        hintNotice = null
+        refreshHintAccess()
+    }
+
+    private fun grantHintAsync(charge: HintCharge) {
         val tier = hintTier
         // `state` is an immutable data class, so this is a safe snapshot to
         // search from even if the player carries on moving meanwhile.
         val at = state
         hintPending = true
+        hintCharge = charge
 
         scope.launch(Dispatchers.Default) {
             val hint = Hints.hintFor(level, at, tier)
@@ -521,6 +657,17 @@ class GameController(
         }
     }
 
+    /**
+     * How the hint about to be derived was PAID for.
+     *
+     * The free allowance and the ad-backed allowance are counted separately in
+     * [HintAllowance], so the two must not be conflated. Charging an ad hint as
+     * a free one would silently shrink the free allowance a player who watched
+     * nothing still gets; charging a free hint as an ad one would let the free
+     * allowance be spent without limit.
+     */
+    private var hintCharge: HintCharge = HintCharge.FREE
+
     private fun applyHint(hint: Hints.Hint?, tier: Int) {
         // A move, an undo or a restart may have arrived while the search ran.
         // Dropping the stale result is correct: it was computed for a board
@@ -529,11 +676,19 @@ class GameController(
         hintPending = false
 
         if (hint == null) {
+            // The reward was earned but the search found nothing to say. The
+            // allowance is NOT charged — the player paid attention and got
+            // nothing, so the credit stays available for the next request.
             hintNotice = if (isComplete) null else "No useful move to suggest from here."
         } else {
             activeHint = hint
             hintNotice = null
-            hintAllowance = HintGate.onFreeHintUsed(hintAllowance)
+            hintAllowance = when (hintCharge) {
+                HintCharge.FREE -> HintGate.onFreeHintUsed(hintAllowance)
+                // Counted in the AD column, so the free allowance of a player
+                // who watched an ad is left exactly as it was.
+                HintCharge.REWARDED -> HintGate.onRewardEarned(hintAllowance)
+            }
             // Escalate: direction, then the block, then the exact next move.
             hintTier = (tier + 1).coerceAtMost(Hints.TIERS - 1)
         }
@@ -545,10 +700,13 @@ class GameController(
         hintNotice = null
         // Cancels any search still running: its board no longer exists.
         hintPending = false
+        // Forgets any unanswered confirmation: the offer was for THIS board.
+        rewardedHintOffer = null
+        rewardedHintPending = false
     }
 
     private fun refreshHintAccess() {
-        hintAccess = HintGate.access(hintAllowance, ads.isRewardedAvailable())
+        hintAccess = HintGate.access(hintAllowance, ads.rewardedAvailability())
     }
 
     // ------------------------------------------------------- completion flow --
