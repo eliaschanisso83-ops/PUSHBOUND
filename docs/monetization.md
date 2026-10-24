@@ -19,7 +19,7 @@ It documents Pushbound only. It says nothing about any other title.
 | Ad unit name | `Pushbound_Rewarded_Hint` |
 | AdMob App ID (debug) | `ca-app-pub-3940256099942544~3347511713` (Google demo) |
 | Rewarded unit (debug) | `ca-app-pub-3940256099942544/5224354917` (Google demo) |
-| SDK artifacts | `com.google.android.gms:play-services-ads:25.5.0`, `com.google.android.ump:user-messaging-platform:3.2.0` |
+| SDK artifacts | `com.google.android.gms:play-services-ads:24.4.0`, `com.google.android.ump:user-messaging-platform:3.2.0` |
 | Formats implemented | **Rewarded only** |
 
 **These identifiers are not secrets.** An AdMob App ID and an ad unit ID are
@@ -43,13 +43,36 @@ The test `developmentBuildsNeverPointAtProductionAdInventory` pins this, and
 `theOnlyAdUnitsInTheProductAreTheRewardedPair` pins that no third ad unit is
 ever added.
 
-### Why the AdMob SDK is in maintenance mode
+### Why the AdMob SDK is in maintenance mode, and why 24.4.0
 
 Google has moved new development to the "GMA Next-Gen SDK" and marks the
 classic `play-services-ads` line as being in maintenance. No Next-Gen artifact
 is published on Google's standard Android Maven index at the time of writing,
 so this project uses the classic SDK, whose Rewarded API is stable and
 documented. This should be revisited before a major new ad feature is added.
+
+The SDK is pinned to **24.4.0** for a hard, measurable reason rather than a
+preference. Pushbound compiles with Kotlin **2.0.21**, which reads Kotlin
+binary metadata up to version 2.0.0 and no further:
+
+| SDK version | Kotlin metadata | Result |
+| --- | --- | --- |
+| 25.5.0 | 2.3.0 | fails to compile |
+| 24.9.0 | 2.2.0 | fails to compile |
+| 24.6.0 | ≤ 2.0.0 | compiles, but depends on `kotlin-stdlib:2.1.0` |
+| **24.4.0** | ≤ 2.0.0 | **compiles, no Kotlin dependency** |
+
+24.6.0 compiles on its own but declares `kotlin-stdlib:2.1.0`, which Gradle's
+version resolution would place back on the classpath and reintroduce the same
+incompatible metadata. 24.4.0 is therefore the newest release that is
+compatible with this toolchain end to end.
+
+This was verified by compiling the real `AdMobAdsGateway.kt` against each
+candidate with the project's own vendored Kotlin compiler — not by inference.
+
+**The ceiling is the compiler, not the ad SDK.** Raising the Kotlin version is
+what would unlock a newer SDK, and that is a toolchain decision to be made on
+its own merits rather than as a side effect of adding advertising.
 
 ---
 

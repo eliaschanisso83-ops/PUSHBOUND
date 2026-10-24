@@ -697,6 +697,35 @@ class AdsPolicyTest {
         )
     }
 
+    @Test
+    fun theAdSdkVersionFitsTheKotlinToolchain() {
+        // NON-OBVIOUS, AND EXPENSIVE TO RE-DISCOVER.
+        //
+        // Pushbound compiles with Kotlin 2.0.21, which reads Kotlin binary
+        // metadata up to 2.0.0 and no further. Newer Google Mobile Ads
+        // releases ship newer metadata and fail script compilation outright
+        // with "Module was compiled with an incompatible version of Kotlin":
+        //
+        //     25.5.0 -> metadata 2.3.0 -> fails
+        //     24.9.0 -> metadata 2.2.0 -> fails
+        //     24.6.0 -> compiles, but pulls kotlin-stdlib 2.1.0, which puts
+        //               the same incompatible metadata back on the classpath
+        //     24.4.0 -> compiles, and declares no Kotlin dependency at all
+        //
+        // So this pin is deliberate rather than stale. Raising it is a
+        // TOOLCHAIN decision — bump Kotlin first — and should be made
+        // knowingly, not by a routine dependency bump.
+        val gradle = implementationTextFiles()
+            .first { it.name == "build.gradle.kts" }
+            .readText()
+
+        assertTrue(
+            "the ad SDK must stay on a release compatible with Kotlin 2.0.21 — " +
+                "see the note in app/build.gradle.kts before changing this",
+            gradle.contains("com.google.android.gms:play-services-ads:24.4.0")
+        )
+    }
+
     /** Reads a file relative to the repository root, which is where tests run. */
     private fun repoFile(path: String): File =
         File(path).takeIf { it.isFile }

@@ -140,12 +140,25 @@ dependencies {
     // only code that can is [AdMobAdsGateway], reached solely through a player
     // confirming the hint offer.
     //
+    // WHY 24.4.0 AND NOT A NEWER ONE. This project compiles with Kotlin
+    // 2.0.21, which reads Kotlin binary metadata up to 2.0.0 and no further.
+    // play-services-ads 25.5.0 ships metadata 2.3.0 and 24.9.0 ships 2.2.0, so
+    // both fail script compilation outright. 24.4.0 is the newest release that
+    // both compiles against this toolchain and declares no kotlin-stdlib of its
+    // own — 24.6.0 also compiles, but drags in kotlin-stdlib 2.1.0, which would
+    // put the same incompatible metadata back on the classpath through Gradle's
+    // version resolution. Verified with the project's own vendored kotlinc.
+    //
+    // The ceiling is the compiler, not the ad SDK: raising the Kotlin version
+    // is what would unlock a newer SDK, and that is a toolchain decision to be
+    // made on its own merits rather than as a side effect of adding ads.
+    //
     // user-messaging-platform (UMP) is Google's consent SDK. It is required to
     // request ads lawfully in regulated regions, and it is deliberately invoked
     // LAZILY on the first confirmed offer rather than at launch, so the game's
     // opening frames are never interrupted by it.
     // -----------------------------------------------------------------------
-    implementation("com.google.android.gms:play-services-ads:25.5.0")
+    implementation("com.google.android.gms:play-services-ads:24.4.0")
     implementation("com.google.android.ump:user-messaging-platform:3.2.0")
 
     testImplementation("junit:junit:4.13.2")
