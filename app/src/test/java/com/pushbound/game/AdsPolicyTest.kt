@@ -715,9 +715,7 @@ class AdsPolicyTest {
         // So this pin is deliberate rather than stale. Raising it is a
         // TOOLCHAIN decision — bump Kotlin first — and should be made
         // knowingly, not by a routine dependency bump.
-        val gradle = implementationTextFiles()
-            .first { it.name == "build.gradle.kts" }
-            .readText()
+        val gradle = repoFile("app/build.gradle.kts").readText()
 
         assertTrue(
             "the ad SDK must stay on a release compatible with Kotlin 2.0.21 — " +
@@ -726,10 +724,26 @@ class AdsPolicyTest {
         )
     }
 
-    /** Reads a file relative to the repository root, which is where tests run. */
-    private fun repoFile(path: String): File =
-        File(path).takeIf { it.isFile }
-            ?: error("$path not found from ${File(".").absolutePath} — run from the repository root")
+    /**
+     * Locates a path relative to the repository root, however the suite was
+     * launched.
+     *
+     * THIS MATTERS AND IS NOT COSMETIC. The local harness runs unit tests from
+     * the repository root, but Gradle runs them with the working directory set
+     * to the app module — so `app/build.gradle.kts` is spelled `build.gradle.kts`
+     * in CI and `app/build.gradle.kts` locally. Every older test in this file
+     * already handles that with a two-candidate list; these helpers do the
+     * same rather than quietly testing one environment.
+     */
+    private fun repoFile(path: String): File {
+        val candidates = listOf(File(path), File(path.removePrefix("app/")))
+        return candidates.firstOrNull { it.isFile }
+            ?: error("$path not found from ${File(".").absolutePath}")
+    }
+
+    /** The repository root, whichever of the two working directories we started in. */
+    private fun repoRoot(): File =
+        if (File("app").isDirectory) File(".") else File("..")
 
     /**
      * The files that could actually INTEGRATE an ad format: shipped source,
@@ -741,13 +755,12 @@ class AdsPolicyTest {
      */
     private fun implementationTextFiles(): List<File> {
         val extensions = setOf("kt", "xml", "kts")
-        val roots = listOf(
-            File("app/src/main"),
-            File("src/main"),
-            File("app/build.gradle.kts")
-        )
+        val roots = listOf("app/src/main", "src/main", "app/build.gradle.kts")
+            .mapNotNull { path ->
+                listOf(File(path), File(path.removePrefix("app/")))
+                    .firstOrNull { it.exists() }
+            }
         return roots
-            .filter { it.exists() }
             .flatMap { root ->
                 if (root.isFile) listOf(root)
                 else root.walkTopDown().filter { it.isFile && it.extension in extensions }.toList()
@@ -759,10 +772,15 @@ class AdsPolicyTest {
      * Every text file that could carry an ad identifier, excluding vendored
      * tooling and build output (which merely copies what is already asserted
      * above).
+     *
+     * Walked from the repository ROOT rather than from wherever the suite was
+     * launched, so that `docs/` and CI configuration are covered in both
+     * environments. Scanning only `app/` would let an identifier added to the
+     * documentation or the workflow slip through.
      */
     private fun repoTextFiles(): List<File> {
         val extensions = setOf("kt", "kts", "xml", "md", "yml", "yaml", "properties", "pro")
-        return File(".").walkTopDown()
+        return repoRoot().walkTopDown()
             .onEnter { it.name !in setOf(".git", "tooling", ".gradle", "build") }
             .filter { it.isFile && it.extension in extensions }
             .toList()
