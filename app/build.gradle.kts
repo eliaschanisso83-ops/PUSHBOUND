@@ -30,14 +30,36 @@ val ADMOB_PRODUCTION_REWARDED_UNIT = "ca-app-pub-5147549053838908/7178497807"
 
 android {
     namespace = "com.pushbound.game"
-    compileSdk = 35
+
+    // GOOGLE PLAY'S TARGET API REQUIREMENT.
+    //
+    // Play refuses to publish a build targeting anything below API 36, so both
+    // values below are 36 and are kept IN STEP on purpose: compileSdk decides
+    // which android.jar we compile against, targetSdk decides which runtime
+    // behaviour the OS applies to us. Diverging them would compile against one
+    // set of rules and promise another.
+    //
+    // AGP IS OLDER THAN THE SDK, DELIBERATELY. This project is on Android
+    // Gradle plugin 8.7.0, which was tested up to compileSdk 35, so the build
+    // prints a warning recommending a newer plugin. That is expected and
+    // non-fatal, and it is not being chased: raising compileSdk is a one-line
+    // change, whereas raising AGP pulls a Gradle and toolchain migration
+    // behind it. The two are separate decisions and only the first is needed
+    // to satisfy Play.
+    //
+    // minSdk stays at 24 and is not affected by any of this.
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.pushbound.game"
         minSdk = 24
-        targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        targetSdk = 36
+
+        // versionCode must strictly increase per Play upload and can never be
+        // reused once consumed. 1 was taken by the 0.1.0 bundle already in the
+        // console, so this build is 2.
+        versionCode = 2
+        versionName = "1.0.1"
 
         // Safe-by-default: unless a build type says otherwise, ads resolve to
         // Google's demo inventory. Nothing can reach production by omission.
