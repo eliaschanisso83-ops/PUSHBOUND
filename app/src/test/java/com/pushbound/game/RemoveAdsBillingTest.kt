@@ -31,8 +31,23 @@ import java.io.File
  */
 class RemoveAdsBillingTest {
 
+    /**
+     * The repository root, whichever of the two working directories the suite
+     * was launched from.
+     *
+     * Gradle runs unit tests with the MODULE directory as the working
+     * directory, while `tools/run-unit-tests.sh` runs them from the repository
+     * root — so a path written for one silently fails to exist under the
+     * other. Commit `9628e88` established this helper for the ad-config tests;
+     * every file-scanning assertion below depends on it in exactly the same
+     * way, and a test that could not find its input would fail for a reason
+     * that has nothing to do with what it is trying to prove.
+     */
+    private fun repoRoot(): File =
+        if (File("app").isDirectory) File(".") else File("..")
+
     private fun source(relative: String): String {
-        val file = File("app/src/main/java/com/pushbound/game/$relative")
+        val file = File(repoRoot(), "app/src/main/java/com/pushbound/game/$relative")
         assertTrue(
             "$relative not found from ${File(".").absolutePath} — run from the repository root",
             file.isFile
@@ -42,7 +57,7 @@ class RemoveAdsBillingTest {
 
     /** Every main-source file that names [symbol], as paths relative to the game package. */
     private fun filesNaming(symbol: String): List<String> {
-        val root = File("app/src/main/java/com/pushbound/game")
+        val root = File(repoRoot(), "app/src/main/java/com/pushbound/game")
         assertTrue("sources not found from ${File(".").absolutePath}", root.isDirectory)
         return root.walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
@@ -75,7 +90,7 @@ class RemoveAdsBillingTest {
         // would happily send it to Play and every reader of the source would
         // believe a product exists. Scanning for quoted literals that LOOK like
         // one is how that accident is caught before it ships.
-        val root = File("app/src/main/java/com/pushbound/game")
+        val root = File(repoRoot(), "app/src/main/java/com/pushbound/game")
         val quotedProductIds = root.walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
             .flatMap { file ->
@@ -304,7 +319,7 @@ class RemoveAdsBillingTest {
 
     @Test
     fun theGooglePlayBillingClientIsImportedOnlyByItsOwnGateway() {
-        val root = File("app/src/main/java/com/pushbound/game")
+        val root = File(repoRoot(), "app/src/main/java/com/pushbound/game")
         val importers = root.walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
             .filter { it.readText().contains("import com.android.billingclient") }
@@ -327,7 +342,7 @@ class RemoveAdsBillingTest {
         // The four shapes a buy button takes in this codebase: an onClick bound
         // to a purchase, a purchase call from a screen, a product id read by a
         // screen, or a string asking the player to buy something. None exist.
-        val root = File("app/src/main/java/com/pushbound/game/ui")
+        val root = File(repoRoot(), "app/src/main/java/com/pushbound/game/ui")
         assertTrue("UI sources not found", root.isDirectory)
 
         val offenders = root.walkTopDown()
@@ -352,7 +367,7 @@ class RemoveAdsBillingTest {
 
     @Test
     fun theBillingDependencyIsPinnedAndTheToolchainAroundItIsNot() {
-        val gradle = File("app/build.gradle.kts")
+        val gradle = File(repoRoot(), "app/build.gradle.kts")
         assertTrue("app/build.gradle.kts not found", gradle.isFile)
         val text = gradle.readText()
 
@@ -363,7 +378,11 @@ class RemoveAdsBillingTest {
         )
 
         // The versions the billing upgrade was explicitly forbidden to move.
-        val root = File("build.gradle.kts")
+        // Resolved from the repository root rather than from the working
+        // directory: under Gradle the working directory is `app/`, where a bare
+        // "build.gradle.kts" is the MODULE's file and does not contain the
+        // plugin versions this assertion is about.
+        val root = File(repoRoot(), "build.gradle.kts")
         assertTrue("build.gradle.kts not found", root.isFile)
         val rootText = root.readText()
         assertTrue("AGP must stay at 8.7.0", rootText.contains("version \"8.7.0\""))
@@ -387,7 +406,7 @@ class RemoveAdsBillingTest {
         // declare it: a hand-written copy would be a second source of truth for
         // a permission that already arrives, and would survive removing the
         // dependency as a permission nobody needs.
-        val manifest = File("app/src/main/AndroidManifest.xml")
+        val manifest = File(repoRoot(), "app/src/main/AndroidManifest.xml")
         assertTrue("AndroidManifest.xml not found", manifest.isFile)
         // Comments are stripped first: the manifest's own explanation says the
         // word "uses-permission" while explaining that none is declared, and

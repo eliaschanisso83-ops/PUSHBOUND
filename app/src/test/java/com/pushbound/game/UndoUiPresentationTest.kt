@@ -23,8 +23,21 @@ import java.io.File
  */
 class UndoUiPresentationTest {
 
+    /**
+     * The repository root, whichever of the two working directories the suite
+     * was launched from.
+     *
+     * Gradle runs unit tests with the MODULE directory as the working
+     * directory, while `tools/run-unit-tests.sh` runs them from the repository
+     * root — so a path written for one silently fails to exist under the
+     * other. Commit `9628e88` established this helper for the ad-config tests;
+     * every source-scanning test below uses it for the same reason.
+     */
+    private fun repoRoot(): File =
+        if (File("app").isDirectory) File(".") else File("..")
+
     private fun source(relative: String): String {
-        val file = File("app/src/main/java/com/pushbound/game/$relative")
+        val file = File(repoRoot(), "app/src/main/java/com/pushbound/game/$relative")
         assertTrue(
             "$relative not found from ${File(".").absolutePath} — run from the repository root",
             file.isFile
@@ -34,7 +47,7 @@ class UndoUiPresentationTest {
 
     /** Every main-source file that names [symbol], as paths relative to the game package. */
     private fun filesNaming(symbol: String): List<String> {
-        val root = File("app/src/main/java/com/pushbound/game")
+        val root = File(repoRoot(), "app/src/main/java/com/pushbound/game")
         assertTrue("sources not found from ${File(".").absolutePath}", root.isDirectory)
         return root.walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
