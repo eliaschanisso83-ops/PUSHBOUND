@@ -854,7 +854,12 @@ class ProgressHintsAndDailyTest {
             "app/src/main/java/com/pushbound/game/levels",
             "src/main/java/com/pushbound/game/levels",
             "app/src/main/java/com/pushbound/game/progress",
-            "src/main/java/com/pushbound/game/progress"
+            "src/main/java/com/pushbound/game/progress",
+            // The credit rules are rules too: they are the reason Undo can be
+            // gated, counted and rolled over at all, and they are compiled by
+            // tools/run-unit-tests.sh with no Android on the classpath.
+            "app/src/main/java/com/pushbound/game/undo",
+            "src/main/java/com/pushbound/game/undo"
         ).map(::File).filter { it.isDirectory }
 
         assertTrue(
@@ -873,7 +878,7 @@ class ProgressHintsAndDailyTest {
             .toList()
 
         assertTrue(
-            "engine/levels/progress must stay free of Android imports, found: $offenders",
+            "engine/levels/progress/undo must stay free of Android imports, found: $offenders",
             offenders.isEmpty()
         )
     }
@@ -882,8 +887,8 @@ class ProgressHintsAndDailyTest {
     fun onlyTheDataPackageTouchesAndroid() {
         // The complement of the test above: Android imports are confined to
         // the layers that are allowed them — the Compose UI, the storage
-        // adapter, and the ONE advertising adapter — so no new platform
-        // dependency can creep into the rules.
+        // adapter, the ONE advertising adapter, and the ONE billing adapter —
+        // so no new platform dependency can creep into the rules.
         val sources = listOf(
             File("app/src/main/java/com/pushbound/game"),
             File("src/main/java/com/pushbound/game")
@@ -902,7 +907,7 @@ class ProgressHintsAndDailyTest {
             .sorted()
             .toList()
 
-        val allowed = setOf("ui", "data", "ads/admob", "MainActivity.kt")
+        val allowed = setOf("ui", "data", "ads/admob", "billing/play", "MainActivity.kt")
         val unexpected = touchingAndroid.filterNot { it in allowed }
         assertTrue(
             "packages that must not depend on Android but now do: $unexpected",
@@ -915,29 +920,89 @@ class ProgressHintsAndDailyTest {
                 "this assertion is passing for the wrong reason",
             touchingAndroid.contains("ads/admob")
         )
+        assertTrue(
+            "billing/play/ must exist as the billing adapter — if it does not, " +
+                "this assertion is passing for the wrong reason",
+            touchingAndroid.contains("billing/play")
+        )
     }
 
     /**
      * The layer an Android import is allowed to live in.
      *
-     * Two-level for `ads`, because `ads/` is one layer with two very different
-     * halves: the policy seam at the top level of `ads` must stay free of
-     * Android so the whole monetisation policy — the hint gate, the
-     * interstitial rules, the rewarded contract — can run under plain JUnit on
-     * a bare JVM, while `ads/admob/` is the single SDK adapter that is
-     * SUPPOSED to talk to Google's classes.
+     * Two-level for `ads` and for `billing`, because each is one layer with
+     * two very different halves: the policy seam at the top level of `ads`
+     * must stay free of Android so the whole monetisation policy — the hint
+     * gate, the interstitial rules, the rewarded contract — can run under
+     * plain JUnit on a bare JVM, while `ads/admob/` is the single SDK adapter
+     * that is SUPPOSED to talk to Google's classes.
      *
-     * Collapsing both to "ads" would quietly legalise Android imports inside
-     * the policy files this suite compiles, and `tools/run-unit-tests.sh`
-     * would stop being able to build them at all.
+     * `billing` has the identical shape, for the identical reason: the
+     * `BillingGateway` interface, the no-op implementation and the Remove Ads
+     * decisions are rules that must be unit-testable without a device, and
+     * `billing/play/` is where a `BillingClient` is allowed to appear.
+     *
+     * Collapsing either pair to its package name would quietly legalise
+     * Android imports inside the policy files this suite compiles, and
+     * `tools/run-unit-tests.sh` would stop being able to build them at all.
      */
     private fun androidOwningPackage(relativePath: String): String {
         val segments = relativePath.split('/')
-        return if (segments.size > 1 && segments[0] == "ads") {
-            "ads/${segments[1]}"
+        val isSeamWithAdapter = segments.size > 1 && (segments[0] == "ads" || segments[0] == "billing")
+        return if (isSeamWithAdapter) {
+            "${segments[0]}/${segments[1]}"
         } else {
             segments[0]
         }
+    }
+
+    @Test
+    fun theBillingSeamItselfStaysPlatformFree() {
+        // The mirror of the advertising test, and the reason the billing
+        // policy is testable at all: `billing/*.kt` is compiled by
+        // tools/run-unit-tests.sh with no Android SDK and no Google Play
+        // Billing client on the classpath, so a single `import android.*` at
+        // that level breaks the local suite outright. Only `billing/play/` —
+        // one directory deeper, and never matched by that script's
+        // non-recursive `billing/*.kt` glob — may reach for the platform.
+        //
+        // This is also what makes "Billing is prepared but inactive" checkable:
+        // the abstraction, its no-op default and the product-id gate are all
+        // pure code, so a test can prove they grant nothing and launch
+        // nothing without a device, a service connection or a product in Play
+        // Console.
+        val seam = listOf(
+            File("app/src/main/java/com/pushbound/game/billing"),
+            File("src/main/java/com/pushbound/game/billing")
+        ).firstOrNull { it.isDirectory }
+            ?: error("billing/ not found from ${File(".").absolutePath}")
+
+        val offenders = seam.listFiles()
+            ?.filter { it.isFile && it.extension == "kt" }
+            ?.filter { file ->
+                file.readLines().any { line ->
+                    line.startsWith("import android") || line.startsWith("import androidx")
+                }
+            }
+            ?.map { it.name }
+            .orEmpty()
+
+        assertTrue(
+            "billing/*.kt must stay Android-free so the billing policy runs on a plain JVM: $offenders",
+            offenders.isEmpty()
+        )
+        // Guard against the directory being empty or missing the seam, which
+        // would make the assertion above pass for the wrong reason.
+        val seamFiles = seam.listFiles()?.count { it.isFile && it.extension == "kt" } ?: 0
+        assertTrue("billing/ must still hold the seam sources", seamFiles > 0)
+
+        // And the adapter must actually exist beneath it — otherwise this test
+        // would be asserting purity over a package that was never written.
+        val adapter = File(seam, "play")
+        assertTrue(
+            "billing/play/ must hold the Google Play Billing adapter",
+            adapter.isDirectory && (adapter.listFiles()?.any { it.extension == "kt" } == true)
+        )
     }
 
     @Test

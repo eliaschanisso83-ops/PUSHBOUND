@@ -15,6 +15,7 @@ import com.pushbound.game.ads.NoOpAdsGateway
 import com.pushbound.game.ads.RewardedAvailability
 import com.pushbound.game.ads.RewardedOutcome
 import com.pushbound.game.engine.ContentKey
+import com.pushbound.game.engine.DailyPuzzle
 import com.pushbound.game.engine.Direction
 import com.pushbound.game.engine.GameSession
 import com.pushbound.game.engine.Hints
@@ -30,6 +31,11 @@ import com.pushbound.game.progress.ProgressStore
 import com.pushbound.game.progress.SavedSession
 import com.pushbound.game.progress.SessionSnapshot
 import com.pushbound.game.progress.SessionStore
+import com.pushbound.game.undo.InMemoryUndoCreditStore
+import com.pushbound.game.undo.UndoAccess
+import com.pushbound.game.undo.UndoCreditState
+import com.pushbound.game.undo.UndoCreditStore
+import com.pushbound.game.undo.UndoGate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -63,6 +69,58 @@ data class RewardedHintOffer(
     /** True when showing would have to fetch an ad first. */
     val willFetch: Boolean
 )
+
+/**
+ * Marker for the "you have used all your Undo moves" restoration offer.
+ *
+ * Unlike [RewardedHintOffer] this carries NO payload, and the difference is
+ * deliberate. A hint offer has two genuinely different promises to word — an
+ * ad is already loaded versus one would have to be fetched first — so its
+ * dialog reads the availability it was given. A restoration makes exactly one
+ * promise whatever the SDK's state: five more moves in exchange for one short
+ * ad, refused outright if the ad does not deliver. Nothing about the choice
+ * varies, so a field would be decoration.
+ *
+ * Held as observable state rather than a callback for the two reasons
+ * [RewardedHintOffer] is: it SURVIVES a recomposition, and a caller that wants
+ * to forget the offer simply nulls it.
+ *
+ * WHAT MAKES IT AN OFFER RATHER THAN AN INTERRUPTION — it exists only after
+ * the player has tapped Undo with a zero balance, it states the reward and the
+ * ad before the choice, "Not now" is an equal exit that costs nothing, and
+ * this object's ONLY caller into the SDK is [GameController.confirmUndoRestoration],
+ * which the player can reach solely by choosing "Watch Ad". Opening this
+ * dialog loads nothing and shows nothing.
+ */
+object UndoRestorationOffer
+
+/**
+ * The balance this controller starts with: whatever was saved, rolled forward
+ * to the local calendar day, or a brand-new player's five credits.
+ *
+ * A FILE-LEVEL FUNCTION RATHER THAN A PRIVATE METHOD, because it runs DURING
+ * construction — from a property initializer — so keeping it off `this` means
+ * it cannot reach a field that has not been assigned yet. That is the classic
+ * way a "just load the saved value" line becomes a cold-start crash.
+ *
+ * THE ROLL-FORWARD IS PERSISTED HERE as well, so the stored value stops
+ * describing a day that has already ended instead of being reinterpreted on
+ * every launch forever.
+ */
+private fun startingUndoCredits(store: UndoCreditStore): UndoCreditState {
+    val today = DailyPuzzle.todayEpochDay()
+
+    val saved = store.load()
+    if (saved == null) {
+        // A player who has never had a balance gets one written at once, so
+        // every later read sees the same five rather than re-deriving them.
+        return UndoGate.initial(today).also { store.save(it) }
+    }
+
+    val rolled = UndoGate.rollForward(saved, today)
+    if (rolled != saved) store.save(rolled)
+    return rolled
+}
 
 /**
  * The logical move the renderer should animate right now: which visual kind
@@ -138,7 +196,22 @@ class GameController(
      * structural questions never need par. Levels are approved one at a time
      * through [Levels.approved] when they are actually played.
      */
-    private val campaign: com.pushbound.game.levels.Campaign = Levels.campaign
+    private val campaign: com.pushbound.game.levels.Campaign = Levels.campaign,
+    /**
+     * Where the Undo credit balance lives.
+     *
+     * LAST PARAMETER DELIBERATELY: every existing call site passes the earlier
+     * ones positionally, and appending keeps each of them meaning exactly what
+     * it always meant — including `GameController(level, scope, store)` in the
+     * animation tests.
+     *
+     * PLAYER-SCOPED, not level-scoped and not mode-scoped. The balance belongs
+     * to the player, so it survives a restart, a level change, a move between
+     * modes and an app restart — which is precisely why NOTHING in [restart]
+     * or [loadLevel] resets it, and why no test of level boundaries can find a
+     * path that spends a credit during initialisation or restoration.
+     */
+    private val undoCreditStore: UndoCreditStore = InMemoryUndoCreditStore()
 ) {
     /**
      * The level on the board right now. Mutable so [loadLevel] can advance the
@@ -265,6 +338,87 @@ class GameController(
      * that something is happening.
      */
     var rewardedHintPending by mutableStateOf(false)
+        private set
+
+    // --- undo credits -------------------------------------------------------
+
+    /**
+     * The player's persistent Undo balance: what is left, and how many
+     * rewarded restorations have already been taken on this calendar day.
+     *
+     * Read from [undoCreditStore] and rolled forward to today during
+     * construction, so a save written before midnight reads as the new day the
+     * moment the controller exists rather than waiting for a tap to notice.
+     *
+     * Whole-state in one observable var rather than three separate ones: the
+     * three fields are only ever written together, and one write means the
+     * control bar cannot recompose half-updated.
+     */
+    private var creditState: UndoCreditState by mutableStateOf(startingUndoCredits(undoCreditStore))
+
+    /**
+     * Credits left, for the number drawn on the Undo control.
+     *
+     * Derived rather than copied, so the figure the player sees can never
+     * drift from the balance the rules enforce.
+     */
+    val undoCreditsRemaining: Int get() = creditState.credits
+
+    /** Successful rewarded restorations already taken on this local day. */
+    val undoRestorationsToday: Int get() = creditState.restorationsToday
+
+    /**
+     * What tapping Undo would do right now.
+     *
+     * Derived from the balance alone — never stored — so the control cannot be
+     * out of step with it, including in the frame straight after a restoration
+     * lands or a credit is spent.
+     */
+    val undoAccess: UndoAccess get() = UndoGate.access(creditState)
+
+    /**
+     * True when the ONLY sensible thing a zero balance can do is offer the
+     * rewarded top-up.
+     *
+     * Exists separately from [canUndo] so the control bar can stay TAPPABLE at
+     * zero credits: a player who has just spent their fifth credit on the
+     * fifth undo may have no history left, and a button gated on history alone
+     * would strand them with no way to earn more.
+     */
+    val canRequestUndoRestoration: Boolean get() = undoAccess == UndoAccess.OFFER_REWARDED
+
+    /**
+     * The screen-reader announcement for the Undo control.
+     *
+     * The count is never the only signal: at zero the player is TOLD Undo is
+     * unavailable rather than being left to infer it from a number.
+     */
+    val undoAccessibilityDescription: String get() = UndoGate.accessibilityLabel(creditState)
+
+    /**
+     * The restoration offer, or null. Raised only by [undo], answered only by
+     * [confirmUndoRestoration] or [dismissUndoRestoration].
+     */
+    var undoRestorationOffer by mutableStateOf<UndoRestorationOffer?>(null)
+        private set
+
+    /**
+     * True while a confirmed restoration ad is being fetched or shown. Stops
+     * the player opening two ads on a double tap, and lets the dialog show
+     * that something is happening.
+     */
+    var undoRestorationPending by mutableStateOf(false)
+        private set
+
+    /**
+     * A short status line about Undo — why no moves were restored, or that
+     * today's allowance is spent.
+     *
+     * NEVER A GATE. It is the same kind of line as [hintNotice], shown in the
+     * same place with the same style, and it exists purely to answer "what
+     * happened?" — the board underneath stays fully playable throughout.
+     */
+    var undoNotice by mutableStateOf<String?>(null)
         private set
 
     // --- advertising policy ------------------------------------------------
@@ -409,16 +563,183 @@ class GameController(
         }
     }
 
+    /**
+     * Walks back one move — when the player still has an Undo credit to spend
+     * on it.
+     *
+     * THE CREDIT IS CHARGED FOR THE ENGINE'S ANSWER, NOT FOR THE TAP. The
+     * engine is asked first and only a successful undo commits the charge, so
+     * a tap with no history to return to, an animation still running, or a
+     * session just restored from a save never costs a credit — while a
+     * genuinely accepted undo costs exactly one, however fast it was tapped.
+     *
+     * AT A ZERO BALANCE nothing is undone and no ad is opened by the act of
+     * tapping: the restoration offer is raised instead, or — once today's
+     * rewarded allowance is also spent — the reason is stated plainly. Either
+     * way the control stays visible, and it stays tappable precisely so the
+     * player's next move, earning more, remains reachable.
+     */
     fun undo() {
         if (animationJob?.isActive == true) return
         queuedDirection = null
-        if (!session.undo()) return
+
+        // A player who left the app open across midnight is on the new day by
+        // now, and the allowance — never the balance — belongs to that day.
+        syncUndoDay()
+
+        when (undoAccess) {
+            UndoAccess.OFFER_REWARDED -> {
+                // RAISED, NOT ACTED ON. Nothing is loaded here: the offer is a
+                // question, and the ad is requested only by
+                // [confirmUndoRestoration], which the player reaches solely by
+                // choosing "Watch Ad".
+                if (undoRestorationOffer == null && !undoRestorationPending) {
+                    undoNotice = null // a stale "nothing happened" line would contradict it
+                    undoRestorationOffer = UndoRestorationOffer
+                }
+                return
+            }
+
+            UndoAccess.EXHAUSTED -> {
+                // Saying there is nothing left is more honest than offering an
+                // ad that the daily limit would refuse a moment later.
+                undoNotice =
+                    "No rewarded Undo restorations left today — Undo returns tomorrow. " +
+                    "You can keep playing either way."
+                return
+            }
+
+            UndoAccess.AVAILABLE -> Unit
+        }
+
+        // Computed BEFORE the engine is asked, and committed only if it says
+        // yes: `charged` is an immutable value, so a refused undo returns here
+        // with the balance untouched and the board untouched.
+        val charged = UndoGate.spend(creditState) ?: return
+        if (!session.undo()) return // nothing to walk back: nothing to charge for
+
+        creditState = charged
+        undoCreditStore.save(charged)
+
         clearHint()
         moveId += 1
         currentMove = MoveAnim(MoveAnimKind.TRANSITION, moveId) // glide, stays in IDLE
         syncFromSession()
         lastPush = null // boxes snap back to their logical cells
         lastBlocked = null // cancel any pending effort pulse
+    }
+
+    // ------------------------------------------------- undo restoration --
+
+    /**
+     * The player confirmed they want to watch an ad to get their five Undo
+     * moves back.
+     *
+     * NOTHING HERE GRANTS ANYTHING EXCEPT [RewardedOutcome.REWARDED]. A load
+     * that failed, an ad closed early, a consent form declined, a timeout or a
+     * lifecycle event all leave the balance exactly where it was, and every one
+     * of them is reported as a short status line rather than an error.
+     *
+     * THE EXACTLY-ONCE GUARD IS CHECKED INSIDE THE CALLBACK rather than
+     * trusted to the gateway: the first delivery clears the two flags below,
+     * so a duplicate reward callback finds them already cleared and returns
+     * with the balance still at five instead of topping it up to ten. The cost
+     * of being wrong here is handing out a second set of moves for one watch.
+     */
+    fun confirmUndoRestoration() {
+        if (undoRestorationOffer == null || undoRestorationPending) return
+        undoRestorationPending = true
+
+        // Re-checked now rather than at the tap: the offer could have stayed
+        // open across midnight, and the count that gates it belongs to TODAY.
+        syncUndoDay()
+
+        ads.showRewarded { outcome ->
+            if (!undoRestorationPending || undoRestorationOffer == null) return@showRewarded
+            undoRestorationPending = false
+            undoRestorationOffer = null
+
+            when (outcome) {
+                RewardedOutcome.REWARDED -> grantUndoRestoration()
+
+                // Nothing was shown and nothing was lost. The distinction from
+                // SKIPPED matters: the player made no decision, so the message
+                // says the ad was unavailable rather than blaming them for
+                // skipping something they never saw.
+                RewardedOutcome.UNAVAILABLE ->
+                    undoNotice = "No ad available right now — your Undo moves are unchanged."
+
+                RewardedOutcome.DISMISSED ->
+                    undoNotice = "No ad was shown, so your Undo moves are unchanged."
+
+                RewardedOutcome.SKIPPED ->
+                    undoNotice = "No Undo moves restored — the ad wasn't finished."
+            }
+        }
+    }
+
+    /**
+     * The player dismissed the restoration offer.
+     *
+     * Declining costs NOTHING: no ad is requested, no credit moves, and the
+     * game is left exactly as it was found. This is the "Not now" path and it
+     * must be a genuine equal of "Watch Ad", not a grudging one.
+     */
+    fun dismissUndoRestoration() {
+        if (undoRestorationPending) return
+        undoRestorationOffer = null
+        undoNotice = null
+    }
+
+    /**
+     * Applies a CONFIRMED reward: the full balance, counted once against
+     * today's allowance.
+     *
+     * ONLY REACHED FROM [RewardedOutcome.REWARDED], and only once per offer.
+     * There is no partial restoration and no partial count — the reward is
+     * five moves or it is nothing, which is what the offer promised.
+     */
+    private fun grantUndoRestoration() {
+        syncUndoDay()
+
+        val restored = UndoGate.restore(creditState, DailyPuzzle.todayEpochDay())
+        if (restored == null) {
+            // UNREACHABLE THROUGH THE UI — the offer is only ever raised while
+            // the allowance has room, and this guard is checked after the day
+            // has been rolled. It exists so that even a stale or duplicated
+            // delivery cannot exceed the daily limit.
+            undoNotice = "That's all the rewarded Undo restorations for today."
+            return
+        }
+
+        creditState = restored
+        undoCreditStore.save(restored)
+        undoNotice = null
+
+        // The same bookkeeping as a rewarded hint. A rewarded ad was shown,
+        // and the quiet period that starts is a property of THAT fact rather
+        // than of which feature asked for it — so the policy stays one policy.
+        interstitialState = InterstitialPolicy.onRewardedShown(
+            interstitialState, System.currentTimeMillis()
+        )
+    }
+
+    /**
+     * Applies the local-calendar-day rollover if midnight has passed, and
+     * persists it when it has.
+     *
+     * CALLED FROM EVERY ENTRY POINT THAT CAN SPEND OR GRANT, never from a
+     * timer or a lifecycle observer: a player who leaves the app open across
+     * midnight is on the new day the next time they touch Undo, with no
+     * background work and nothing to wake up for. It only ever rewrites
+     * [UndoCreditState.restorationsToday] — the balance they are holding is
+     * carried across untouched, which is the whole point of the distinction.
+     */
+    private fun syncUndoDay() {
+        val rolled = UndoGate.rollForward(creditState, DailyPuzzle.todayEpochDay())
+        if (rolled == creditState) return
+        creditState = rolled
+        undoCreditStore.save(rolled)
     }
 
     /**
@@ -703,6 +1024,17 @@ class GameController(
         // Forgets any unanswered confirmation: the offer was for THIS board.
         rewardedHintOffer = null
         rewardedHintPending = false
+        // THE STATUS LINE SHARES THIS ONE HOOK. `clearHint` is called from
+        // every place the player acting ends a previous statement — a move, an
+        // undo, a redo, a restart, a new level — so an Undo explanation like
+        // "no ad available right now" disappears on the next genuine action
+        // instead of lingering over unrelated play.
+        //
+        // It deliberately does NOT touch the restoration offer or its pending
+        // flag. Clearing `undoRestorationPending` while an ad the player chose
+        // to watch was still on screen would make the exactly-once guard reject
+        // the real reward, so the player would have watched for nothing.
+        undoNotice = null
     }
 
     private fun refreshHintAccess() {

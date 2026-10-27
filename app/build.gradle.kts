@@ -183,5 +183,42 @@ dependencies {
     implementation("com.google.android.gms:play-services-ads:24.4.0")
     implementation("com.google.android.ump:user-messaging-platform:3.2.0")
 
+    // -----------------------------------------------------------------------
+    // Google Play Billing — INFRASTRUCTURE ONLY. NOT ONE PRODUCT EXISTS YET.
+    //
+    // This dependency is here to prepare the future one-time **Remove Ads**
+    // purchase, and for nothing else: `RemoveAdsProduct.REMOVE_ADS_PRODUCT_ID`
+    // is an empty string until a real product is created by hand in Play
+    // Console, so `GooglePlayBillingGateway` refuses before contacting Play and
+    // no screen in the app offers a purchase. Adding the library now means the
+    // `com.android.vending.BILLING` permission arrives through normal manifest
+    // merging rather than by hand-editing the manifest later, which is the
+    // precondition Google Play itself states for creating a one-time product.
+    //
+    // WHY 8.3.0 AND NOT 9.x. Both compile against this toolchain — verified by
+    // compiling the real gateway with the project's own vendored kotlinc
+    // against each candidate's own classes.jar — but they do not cost the same:
+    //
+    //   9.0.0 / 9.1.0  depend on androidx.core:core:1.15.0, which Gradle would
+    //                   resolve OVER this app's pinned core-ktx:1.13.1. That is
+    //                   an unrelated AndroidX upgrade smuggled in behind a
+    //                   billing change, on a build with no device to verify it
+    //                   on.
+    //   8.3.0          the newest release whose only androidx dependency is
+    //                   activity:1.2.3 — which this app already exceeds with
+    //                   activity-compose:1.9.0, so nothing already pinned here
+    //                   moves at all.
+    //
+    // Neither declares a kotlin-stdlib, so Kotlin 2.0.21 stays in charge of
+    // the stdlib version — the exact trap that ruled out play-services-ads
+    // 24.6.0. Raising billing to 9.x is a toolchain decision to be made on its
+    // own merits, not as a side effect of adding the seam.
+    //
+    // The transitive graph was inspected POM by POM and contributes no new
+    // permission: transport-runtime asks for ACCESS_NETWORK_STATE, which the
+    // advertising SDK already brings, and no other new artifact declares one.
+    // -----------------------------------------------------------------------
+    implementation("com.android.billingclient:billing:8.3.0")
+
     testImplementation("junit:junit:4.13.2")
 }

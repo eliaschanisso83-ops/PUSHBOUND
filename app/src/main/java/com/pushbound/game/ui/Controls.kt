@@ -22,11 +22,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -111,10 +113,23 @@ fun ControlsBar(controller: GameController, modifier: Modifier = Modifier) {
             SecondaryButton(
                 resId = R.drawable.ui_button_undo,
                 label = "Undo",
-                enabled = controller.canUndo,
+                // Tappable whenever it could DO something: walk back a move,
+                // or — with no credits left — open the way to earn more.
+                // Gating on history alone would strand a player whose balance
+                // reached zero on the very last undo, with no history left to
+                // arm the button and no route back to five moves.
+                enabled = controller.canUndo || controller.canRequestUndoRestoration,
                 mirrored = false,
                 onClick = controller::undo,
-                modifier = Modifier.offset(formation.undo.left.dp, formation.undo.top.dp)
+                modifier = Modifier.offset(formation.undo.left.dp, formation.undo.top.dp),
+                // ALWAYS PRESENT, from five down to zero — never hidden when
+                // empty, because a control that vanishes at zero teaches the
+                // player nothing about where their moves went or how to get
+                // them back. Red marks zero as the state worth noticing while
+                // the balance itself is the number already on screen.
+                badge = controller.undoCreditsRemaining.toString(),
+                badgeEmphasised = controller.undoCreditsRemaining == 0,
+                accessibilityLabel = controller.undoAccessibilityDescription
             )
             SecondaryButton(
                 resId = R.drawable.ui_button_undo,
@@ -302,6 +317,25 @@ private fun DirectionButton(
  * target, which is how Redo is rendered: the approved Undo artwork reversed,
  * so the pair reads as "backwards" and "forwards" without inventing an asset
  * that art-direction currently forbids generating.
+ *
+ * [badge] is the live Undo credit count, drawn as a small chip in the top-end
+ * corner — the ONE control that shows a number, because it is the only control
+ * with a resource the player can run out of. It never replaces the artwork
+ * beneath it and never hides the control, so the layout art direction approved
+ * is unchanged; the chip is additive type, in the same typography as the HUD.
+ *
+ * [accessibilityLabel] replaces [label] for screen readers. Both are separate
+ * parameters on purpose: the label is what a sighted player reads off the
+ * artwork, while the description has to carry the state a sighted player gets
+ * from the chip — how many moves remain, and whether Undo is usable at all.
+ * The badge itself is stripped from the accessibility tree (see below) so the
+ * count is not announced twice, once as bare text and once in the label.
+ *
+ * NAMED `accessibilityLabel` RATHER THAN `contentDescription` because inside a
+ * `semantics { }` block the receiver's own `contentDescription` is the nearer
+ * candidate: naming the parameter the same thing would quietly resolve the
+ * right-hand side to the semantics property and self-assign it, leaving the
+ * control silent instead of announcing its state.
  */
 @Composable
 private fun SecondaryButton(
@@ -310,7 +344,10 @@ private fun SecondaryButton(
     enabled: Boolean,
     mirrored: Boolean,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    badge: String? = null,
+    badgeEmphasised: Boolean = false,
+    accessibilityLabel: String = label
 ) {
     val bitmap = rememberGameBitmap(resId)
     val interactionSource = remember { MutableInteractionSource() }
@@ -327,7 +364,7 @@ private fun SecondaryButton(
                 role = Role.Button,
                 onClick = onClick
             )
-            .semantics { contentDescription = label }
+            .semantics { contentDescription = accessibilityLabel }
     ) {
         Canvas(
             Modifier
@@ -348,6 +385,68 @@ private fun SecondaryButton(
                 colorFilter = if (active) PressedDarken else null
             )
         }
+
+        if (badge != null) {
+            CreditBadge(
+                value = badge,
+                emphasised = badgeEmphasised,
+                modifier = Modifier
+                    // Top-end corner: clear of the glyph in the middle of the
+                    // slice, inside the button's own bounds, so it can never
+                    // grow the control or collide with its neighbour.
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+            )
+        }
+    }
+}
+
+/**
+ * The Undo credit chip: the number the player is entitled to see at all times.
+ *
+ * WHY A CHIP AND NOT A HOLE IN THE ARTWORK — the approved buttons cannot be
+ * altered, so the count is laid OVER the artwork rather than drawn into it,
+ * and it carries its own opaque background so it stays legible against
+ * whatever is underneath instead of depending on it.
+ *
+ * WHY RED AT ZERO — the balance is still shown, still visible, and the control
+ * may still be tappable (to earn more), so dimming it as if it were disabled
+ * would lie. Kiln Red marks the state that needs attention while everything
+ * else stays in the normal palette; it is the same accent already used for a
+ * gold-medal achievement, so it introduces no new hue.
+ *
+ * `clearAndSetSemantics` strips the bare number from the accessibility tree.
+ * The control already announces "Undo, 5 moves remaining" through its own
+ * description, and leaving the digit as a separate node would make a screen
+ * reader say the count twice, out of context, before the word Undo.
+ */
+@Composable
+private fun CreditBadge(
+    value: String,
+    emphasised: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val foreground = if (emphasised) Color(0xFFF3EDE2)
+    else MaterialTheme.colorScheme.onBackground
+    val background = if (emphasised) Color(0xFFD6462B)
+    else MaterialTheme.colorScheme.surface
+    val outline = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
+
+    Box(
+        modifier
+            .background(background, RoundedCornerShape(9.dp))
+            .border(1.dp, outline, RoundedCornerShape(9.dp))
+            .padding(horizontal = 5.dp, vertical = 1.dp)
+            .clearAndSetSemantics { },
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = value,
+            color = foreground,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
+        )
     }
 }
 

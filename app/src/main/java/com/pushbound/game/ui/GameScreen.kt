@@ -47,10 +47,12 @@ import com.pushbound.game.ads.AdsGateway
 import com.pushbound.game.ads.NoOpAdsGateway
 import com.pushbound.game.data.SharedPreferencesProgressStore
 import com.pushbound.game.data.SharedPreferencesSessionStore
+import com.pushbound.game.data.SharedPreferencesUndoCreditStore
 import com.pushbound.game.engine.ContentKey
 import com.pushbound.game.engine.Medal
 import com.pushbound.game.engine.ModeResolver
 import com.pushbound.game.progress.SessionStore
+import com.pushbound.game.undo.UndoGate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -119,6 +121,12 @@ fun GameScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val progressStore = remember(context) { SharedPreferencesProgressStore(context) }
+    // The Undo balance lives in its own file, but for the same reason and
+    // created the same way: one small local resource, remembered alongside the
+    // stores it must never be confused with, and reconstructed whenever the
+    // context does so a configuration change re-reads a durable value rather
+    // than a stale one.
+    val undoCreditStore = remember(context) { SharedPreferencesUndoCreditStore(context) }
     // Defaults to the platform store so a caller that only needs gameplay (the
     // animation tests, a preview) still gets a working, isolated session.
     val sessions = sessionStore ?: remember(context) { SharedPreferencesSessionStore(context) }
@@ -129,7 +137,7 @@ fun GameScreen(
     // The AUTHORED campaign is used for these lookups: deciding which id to open
     // is a structural question and must not drag the solver onto the startup
     // path. Exactly one level is then approved, by [Levels.byId].
-    val controller = remember(scope, progressStore, sessions, startKey, ads) {
+    val controller = remember(scope, progressStore, undoCreditStore, sessions, startKey, ads) {
         // Resolve the STRUCTURE from the authored campaign (no solver), then
         // approve exactly the one level that will be played via Levels.byId.
         //
@@ -162,7 +170,8 @@ fun GameScreen(
             scope = scope,
             progressStore = progressStore,
             sessionStore = sessions,
-            ads = ads
+            ads = ads,
+            undoCreditStore = undoCreditStore
         )
     }
 
@@ -242,9 +251,12 @@ fun GameScreen(
             }
         }
 
-        // The hint notice is a status line, never a gate: it explains why
-        // nothing happened and leaves the board fully playable underneath.
-        val notice = controller.hintNotice
+        // The notice is a status line, never a gate: it explains why nothing
+        // happened and leaves the board fully playable underneath. One line
+        // for both systems — a hint explanation and an Undo explanation are
+        // never posted at the same moment, and giving them a shared slot means
+        // they can never overlap or stack on top of each other.
+        val notice = controller.hintNotice ?: controller.undoNotice
         if (notice != null) {
             Box(
                 Modifier
@@ -270,6 +282,7 @@ fun GameScreen(
 
         CompletionOverlay(controller)
         RewardedHintDialog(controller)
+        UndoRestorationDialog(controller)
     }
 }
 
@@ -458,6 +471,147 @@ private fun RewardedHintDialog(controller: GameController) {
                 Button(
                     onClick = controller::dismissRewardedHint,
                     enabled = !controller.rewardedHintPending,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF2B2622).copy(alpha = 0.08f),
+                        contentColor = Color(0xFF2B2622)
+                    )
+                ) {
+                    Text(
+                        text = "Not now",
+                        fontSize = 15.sp,
+                        letterSpacing = 1.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The "out of Undo moves" offer.
+ *
+ * WHAT THIS DIALOG IS ALLOWED TO DO — ask, and nothing else. It is raised ONLY
+ * by a tap on Undo while the balance is zero, it states the cost and the
+ * reward before the choice, it gives "Not now" equal visual weight, and it
+ * reaches the advertising SDK through exactly ONE line: the button that says
+ * "Watch Ad". Merely opening it loads nothing, shows nothing, starts no timer
+ * and changes no counter, and dismissing it leaves the game byte-for-byte as
+ * it was — those are the properties that make it a confirmation rather than an
+ * interruption, and they are pinned by tests, not by intent.
+ *
+ * THE FAILURE IT DOES NOT PRESENT — there is no error state here by design. If
+ * the ad cannot be fetched or is closed early, the dialog closes and a single
+ * status line says the balance is unchanged; play is never blocked, never
+ * gated behind a retry, and never told that something is wrong with the game.
+ *
+ * SAME TINT AND SHAPE FAMILY AS [RewardedHintDialog] and the completion
+ * overlay, so it reads as part of the game rather than as something that
+ * arrived from outside it — which matters most here, because this is the one
+ * dialog in Pushbound that mentions an ad.
+ */
+@Composable
+private fun UndoRestorationDialog(controller: GameController) {
+    if (controller.undoRestorationOffer == null) return
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color(0x992B2622))
+            // The board under the scrim is inert, but the two buttons inside
+            // the dialog stay live — this gesture detector only swallows the
+            // touches that actually reach it.
+            .pointerInput(Unit) { detectTapGestures { } },
+        contentAlignment = Alignment.Center
+    ) {
+        Surface(
+            shape = RoundedCornerShape(20.dp),
+            color = Color(0xFFF1EADD),
+            shadowElevation = 10.dp
+        ) {
+            Column(
+                Modifier.padding(horizontal = 30.dp, vertical = 26.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Out of Undo moves",
+                    color = Color(0xFF2B2622),
+                    fontSize = 21.sp,
+                    fontWeight = FontWeight.Medium
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                Text(
+                    // WHERE THEY STAND, BEFORE WHAT IS ON OFFER. A player who
+                    // has just watched their balance reach zero deserves the
+                    // explanation first, not a sales line.
+                    text = "You've used all ${UndoGate.MAX_UNDO_CREDITS} Undo moves.",
+                    color = Color(0xFF2B2622).copy(alpha = 0.85f),
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 21.sp
+                )
+
+                Spacer(Modifier.height(8.dp))
+
+                Text(
+                    // The reward, stated plainly: the number they get back and
+                    // the ad they watch for it, before either choice.
+                    text = "Watch a short rewarded ad to restore " +
+                        "${UndoGate.MAX_UNDO_CREDITS} Undo moves.",
+                    color = Color(0xFF2B2622).copy(alpha = 0.85f),
+                    fontSize = 15.sp,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 21.sp
+                )
+
+                Spacer(Modifier.height(8.dp))
+
+                Text(
+                    // DECLINING IS AN EQUAL EXIT, said in words rather than
+                    // implied by a dimmed button. This is the promise the rules
+                    // require: nothing changes if the player says no.
+                    text = "It's optional — you can keep playing without it, and " +
+                        "nothing about your progress or your balance changes.",
+                    color = Color(0xFF2B2622).copy(alpha = 0.62f),
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center,
+                    lineHeight = 18.sp
+                )
+
+                Spacer(Modifier.height(20.dp))
+
+                // THE ONLY LINE THAT REACHES THE AD SDK. Everything above it is
+                // text, and everything below it declines.
+                Button(
+                    onClick = controller::confirmUndoRestoration,
+                    enabled = !controller.undoRestorationPending,
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF2B2622),
+                        contentColor = Color(0xFFF3EDE2)
+                    )
+                ) {
+                    Text(
+                        text = if (controller.undoRestorationPending) {
+                            "Loading…"
+                        } else {
+                            "Watch Ad"
+                        },
+                        fontSize = 15.sp,
+                        letterSpacing = 1.sp
+                    )
+                }
+
+                Spacer(Modifier.height(10.dp))
+
+                // DECLINING COSTS NOTHING. Present at once, never de-emphasised
+                // into an afterthought: one equally sized tap, directly
+                // beneath, which requests no ad and moves no credit.
+                Button(
+                    onClick = controller::dismissUndoRestoration,
+                    enabled = !controller.undoRestorationPending,
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = Color(0xFF2B2622).copy(alpha = 0.08f),

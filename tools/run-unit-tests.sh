@@ -49,6 +49,12 @@ fi
 # engine/ is pure Kotlin. ui/ contributes only its Android-free arithmetic
 # files; GameController is included because it compiles against the Compose
 # runtime and coroutines jars vendored in tooling/.
+#
+# undo/ and the top level of billing/ are pure by design — that is WHY the
+# credit rules, the daily rollover and the Remove Ads decisions live there and
+# the SDK adapters do not. billing/play/ is listed nowhere below because it
+# imports the Google Play Billing client, which has no JVM classes to compile
+# against here; its compile correctness is proven on CI instead.
 MAIN_SOURCES=(
     app/src/main/java/com/pushbound/game/Levels.kt
     app/src/main/java/com/pushbound/game/engine/*.kt
@@ -58,6 +64,9 @@ MAIN_SOURCES=(
     app/src/main/java/com/pushbound/game/progress/ProgressStore.kt
     app/src/main/java/com/pushbound/game/progress/SavedSession.kt
     app/src/main/java/com/pushbound/game/ads/*.kt
+    app/src/main/java/com/pushbound/game/undo/*.kt
+    app/src/main/java/com/pushbound/game/billing/BillingGateway.kt
+    app/src/main/java/com/pushbound/game/billing/RemoveAds.kt
     app/src/main/java/com/pushbound/game/ui/BoardLayout.kt
     app/src/main/java/com/pushbound/game/ui/ControlLayout.kt
     app/src/main/java/com/pushbound/game/ui/GameLayout.kt

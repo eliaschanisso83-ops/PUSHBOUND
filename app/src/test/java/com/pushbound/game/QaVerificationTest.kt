@@ -794,10 +794,18 @@ class QaVerificationTest {
     }
 
     @Test
-    fun undoAndRedoAreNeverGatedByAnything() {
+    fun undoAndRedoAreNeverGatedByAdsHintsOrProgression() {
+        // THE CONTRACT, RESTATED AFTER THE CREDIT SYSTEM ARRIVED. Undo and redo
+        // are still ungated by advertising, by hints, by progression, by medal
+        // standing and by which mode is being played — none of those may ever
+        // become a precondition for walking history back. What Undo IS gated by
+        // now is the one thing the feature introduced: a credit, which this
+        // test starts with a full five of, so a single undo must be free of
+        // any doubt. Redo is not a resource and costs nothing at all.
         val controller = GameController(Levels.byId("w1-1")!!, scope, InMemoryProgressStore())
         assertFalse(controller.canUndo)
         assertFalse(controller.canRedo)
+        assertEquals("a new player starts with a full balance", 5, controller.undoCreditsRemaining)
 
         controller.onDirectionPressed(Direction.UP)
         assertTrue("one legal move must arm undo", controller.canUndo)
@@ -806,10 +814,20 @@ class QaVerificationTest {
         // window instead of guessing how long the coroutine takes to run.
         awaitIdle(controller) { controller.undo() }
         assertTrue(controller.canRedo)
+        assertEquals(
+            "exactly one credit for exactly one successful undo",
+            4,
+            controller.undoCreditsRemaining
+        )
 
         awaitIdle(controller) { controller.redo() }
         assertTrue(controller.canUndo)
         assertFalse(controller.canRedo)
+        assertEquals(
+            "redo is not a resource: it never costs a credit",
+            4,
+            controller.undoCreditsRemaining
+        )
     }
 
     // ===================================================================
