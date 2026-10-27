@@ -49,6 +49,47 @@ jobs:
       - name: Run Android lint
         run: ./gradlew lintDebug
 
+      # The resolved release classpath, printed for review and then asserted.
+      #
+      # These checks read what Gradle ACTUALLY RESOLVED rather than what the
+      # build script declares, because that is the only place a transitive
+      # upgrade shows up: a billing client that quietly dragged
+      # kotlin-stdlib past 2.0.21, or androidx.core over this app's pinned
+      # 1.13.1, would be invisible to every dependency line anyone wrote
+      # while still landing in the shipped APK. The two pins below are the
+      # ones chosen against this toolchain — 9.x of the billing client
+      # resolves core:1.15.0 over core-ktx:1.13.1, and play-services-ads is
+      # held at 24.4.0 because later versions ship newer Kotlin metadata
+      # than this compiler reads.
+      #
+      # Placed after tests and lint so those still fail fastest, and it
+      # uploads nothing — the artifact set stays exactly one APK and one AAB.
+      - name: Inspect release runtime dependency tree
+        run: |
+          ./gradlew :app:dependencies --configuration releaseRuntimeClasspath > deps-tree.txt
+
+          echo "=== RELEASE RUNTIME CLASSPATH ==="
+          cat deps-tree.txt
+
+          if ! grep -q "com.android.billingclient:billing:8.3.0" deps-tree.txt; then
+            echo "FAIL: the billing client did not resolve to 8.3.0"
+            exit 1
+          fi
+          if ! grep -q "com.google.android.gms:play-services-ads:24.4.0" deps-tree.txt; then
+            echo "FAIL: play-services-ads did not resolve to 24.4.0"
+            exit 1
+          fi
+          if grep -q "org.jetbrains.kotlin:kotlin-stdlib:2.1" deps-tree.txt; then
+            echo "FAIL: something dragged kotlin-stdlib past 2.0.21"
+            exit 1
+          fi
+          if grep -q "androidx.core:core:1.15" deps-tree.txt; then
+            echo "FAIL: something dragged androidx.core over the pinned 1.13.1"
+            exit 1
+          fi
+          echo
+          echo "=== RESOLVED: billing 8.3.0, play-services-ads 24.4.0, kotlin-stdlib <= 2.0.21, androidx.core 1.13.x ==="
+
       # Compile check only — the resulting debug APK is NOT uploaded. Release
       # runs publish one APK and one AAB; fork PRs have no signing secrets, so
       # this is what still proves the app assembles on them.
